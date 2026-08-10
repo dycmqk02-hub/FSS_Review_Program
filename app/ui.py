@@ -289,7 +289,7 @@ class App(ctk.CTk):
         )
         self.tabview.pack(fill="both", expand=True, padx=24, pady=(0, 20))
 
-        self.tab_names = ["요약", "체크리스트", "숫자 스크리닝", "증감분석", "회계처리 변경", "참조자료", "연결 vs 별도"]
+        self.tab_names = ["요약", "체크리스트", "숫자 스크리닝", "증감분석", "합계검증", "회계처리 변경", "참조자료", "연결 vs 별도"]
         for name in self.tab_names:
             self.tabview.add(name)
 
@@ -523,6 +523,23 @@ class App(ctk.CTk):
             rh.render_variance_tables(var_tab, data["variance_tables"], data["detected_unit"], data["pm_threshold"],
                                        data.get("variance_source"))
 
+        # 합계검증 탭 (재무제표 계층별 합계검증 + FS간 교차검증, XBRL·PDF 둘 다)
+        calc_tab = self.scroll_frames["합계검증"]
+        if is_dual:
+            rh.doc_label_title(calc_tab, "연결재무제표")
+            rh.render_calc_check(calc_tab, sections["consol"].get("calc_check", {}))
+            rh.render_cross_check_fs(calc_tab, sections["consol"].get("cross_check_fs", {}))
+            rh.render_note_check(calc_tab, sections["consol"].get("note_check", {}))
+            rh.doc_label_title(calc_tab, "별도재무제표")
+            rh.render_calc_check(calc_tab, sections["separate"].get("calc_check", {}))
+            rh.render_cross_check_fs(calc_tab, sections["separate"].get("cross_check_fs", {}))
+            rh.render_note_check(calc_tab, sections["separate"].get("note_check", {}))
+        else:
+            data = sections["single"]
+            rh.render_calc_check(calc_tab, data.get("calc_check", {}))
+            rh.render_cross_check_fs(calc_tab, data.get("cross_check_fs", {}))
+            rh.render_note_check(calc_tab, data.get("note_check", {}))
+
         # 회계처리 변경 탭
         change_tab = self.scroll_frames["회계처리 변경"]
         if is_dual:
@@ -561,6 +578,15 @@ class App(ctk.CTk):
                   theme.ACCENT_MINT if req_missing == 0 else theme.ACCENT_CORAL).pack(side="left", padx=4)
         rh.badge(row, f"합계검산 불일치 {len(data['sum_check'])}건",
                   theme.ACCENT_MINT if not data["sum_check"] else theme.ACCENT_CORAL).pack(side="left", padx=4)
+        calc_check = data.get("calc_check") or {}
+        calc_mismatches = sum(len(src.get(s, {}).get("mismatches", []))
+                               for src in calc_check.values() if src
+                               for s in ["재무상태표", "손익계산서", "자본변동표", "현금흐름표"])
+        cross_check_fs = data.get("cross_check_fs") or {}
+        cross_mismatches = sum(len(v) for v in cross_check_fs.values() if v)
+        total_calc_issues = calc_mismatches + cross_mismatches
+        rh.badge(row, f"합계검증(계층/FS간) 불일치 {total_calc_issues}건",
+                  theme.ACCENT_MINT if total_calc_issues == 0 else theme.ACCENT_CORAL).pack(side="left", padx=4)
         rh.badge(row, f"회계처리변경 키워드 {len(data['accounting_changes'])}건", theme.ACCENT_SKY).pack(side="left", padx=4)
         rh.badge(row, f"총 {data['page_count']}p", theme.BG_SIDEBAR).pack(side="left", padx=4)
 

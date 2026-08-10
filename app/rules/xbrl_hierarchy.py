@@ -64,6 +64,26 @@ def find_statement_roles(xsd_path: str) -> dict:
     return result
 
 
+def all_roles(xsd_path: str) -> list[tuple[str, str]]:
+    """스키마에 정의된 모든 role의 (roleURI, definition) 목록. 재무제표 4종 외의 role은
+    대부분 주석(note) 공시용이다."""
+    tree = ET.parse(xsd_path)
+    root = tree.getroot()
+    result = []
+    for role_type in root.iter(f"{NS_LINK}roleType"):
+        role_uri = role_type.attrib.get("roleURI", "")
+        defn_el = role_type.find(f"{NS_LINK}definition")
+        result.append((role_uri, defn_el.text if defn_el is not None and defn_el.text else ""))
+    return result
+
+
+def role_elements(pre_path: str, role_uri: str) -> set[str]:
+    """해당 role의 Presentation Linkbase에 등장하는 모든 요소명 집합
+    (재무제표 계정이 어느 주석 role에도 등장하는지 대사할 때 사용)."""
+    _roots, _children, all_elems = _parse_presentation_role(pre_path, role_uri)
+    return all_elems
+
+
 def _parse_presentation_role(pre_path: str, role_uri: str):
     tree = ET.parse(pre_path)
     root = tree.getroot()

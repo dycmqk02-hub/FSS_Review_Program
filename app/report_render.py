@@ -62,7 +62,99 @@ def _render_single(title: str, data: dict) -> str:
 
     lines.append(_render_variance(data.get("variance_tables", {}), data.get("detected_unit"),
                                    data.get("pm_threshold")))
+    lines.append(_render_calc_check(data.get("calc_check", {})))
+    lines.append(_render_cross_check_fs(data.get("cross_check_fs", {})))
+    lines.append(_render_note_check(data.get("note_check", {})))
 
+    return "\n".join(lines)
+
+
+_CALC_CHECK_SOURCE_LABELS = {"xbrl": "XBRL(정밀 매칭)", "pdf": "PDF 표(휴리스틱, 오탐 가능)"}
+
+
+def _render_calc_check(calc_check: dict) -> str:
+    lines = ["  [재무제표 계층별 합계검증 - leaf 합계 -> 소계 -> 최상위 총계, 전 레벨]"]
+    sources = [(k, calc_check.get(k)) for k in ("xbrl", "pdf") if calc_check.get(k)]
+    if not sources:
+        lines.append("   - 검증 결과가 없습니다.")
+        return "\n".join(lines)
+    for src_key, src_data in sources:
+        lines.append(f"   [{_CALC_CHECK_SOURCE_LABELS[src_key]}]")
+        for stmt in ["재무상태표", "손익계산서", "자본변동표", "현금흐름표"]:
+            data = src_data.get(stmt, {})
+            lines.append(f"     [{stmt}]")
+            note = data.get("note")
+            if note:
+                lines.append(f"       - {note}")
+            mismatches = data.get("mismatches", [])
+            if not mismatches:
+                if not note:
+                    lines.append("       - 불일치 없음")
+                continue
+            for f in mismatches[:60]:
+                seg = f" · {f['segment']}" if f.get("segment") else ""
+                period = f"[{f['period']}] " if f.get("period") else ""
+                lines.append(
+                    f"       - {period}'{f['parent']}'{seg}: 기재값 {f['stated']:,.0f} "
+                    f"vs 하위항목합계 {f['computed']:,.0f} (차이 {f['diff']:,.0f}) "
+                    f"- 하위항목: {', '.join(f['children'])}"
+                )
+            if len(mismatches) > 60:
+                lines.append(f"       - 외 {len(mismatches) - 60}건 (GUI 화면에서 전체 확인 가능)")
+    return "\n".join(lines)
+
+
+def _render_cross_check_fs(cross_check: dict) -> str:
+    lines = ["  [FS간 교차검증 - 동일 계정과목의 재무제표간 대사]"]
+    sources = [(k, cross_check.get(k)) for k in ("xbrl", "pdf") if cross_check.get(k) is not None]
+    if not sources:
+        lines.append("   - 검증 결과가 없습니다.")
+        return "\n".join(lines)
+    for src_key, findings in sources:
+        lines.append(f"   [{_CALC_CHECK_SOURCE_LABELS[src_key]}]")
+        if not findings:
+            lines.append("     - 불일치 없음")
+            continue
+        for f in findings:
+            lines.append(f"     - {f['item']}:")
+            for v in f["values"]:
+                lines.append(f"        · [{v['source']}] {v['label']} = {v['value']:,.0f}")
+    return "\n".join(lines)
+
+
+def _render_note_check(note_check: dict) -> str:
+    lines = ["  [주석(Note) 공시 대사]"]
+    xbrl = note_check.get("xbrl")
+    pdf = note_check.get("pdf") or {}
+
+    if xbrl:
+        lines.append("   [XBRL(정밀 매칭)]")
+        cr = xbrl.get("cross_reference") or {}
+        lines.append(f"     - 확인됨 {cr.get('confirmed', 0)}건 / 주석 미확인 {len(cr.get('unmatched', []))}건")
+        for u in cr.get("unmatched", [])[:40]:
+            lines.append(f"        · [{u['stmt']}] {u['label']} ({u['element']}) = {u['value']:,.0f}")
+        calc_hier = xbrl.get("calc_hierarchy") or []
+        lines.append("     [주석 내 계층별 합계검증]")
+        if not calc_hier:
+            lines.append("       - 불일치 없음")
+        else:
+            for m in calc_hier[:40]:
+                lines.append(f"       - [{m['note']}] '{m['parent']}': 기재값 {m['stated']:,.0f} "
+                             f"vs 하위항목합계 {m['computed']:,.0f} (차이 {m['diff']:,.0f})")
+
+    lines.append("   [PDF 표(휴리스틱, 오탐 가능)]")
+    at = pdf.get("amount_tracing") or {}
+    lines.append(f"     - 확인됨 {at.get('confirmed', 0)}건 / 주석 미확인 {len(at.get('unmatched', []))}건")
+    for u in at.get("unmatched", [])[:40]:
+        lines.append(f"        · [{u['stmt']}] {u['label']} = {u['value']:,.0f} (참조 주석: {', '.join(u['notes'])})")
+    table_hier = pdf.get("table_hierarchy") or []
+    lines.append("     [주석 표 내 계층별 합계검증]")
+    if not table_hier:
+        lines.append("       - 불일치 없음")
+    else:
+        for m in table_hier[:40]:
+            lines.append(f"       - [{m['note']}] '{m['parent']}': 기재값 {m['stated']:,.0f} "
+                         f"vs 하위항목합계 {m['computed']:,.0f} (차이 {m['diff']:,.0f})")
     return "\n".join(lines)
 
 

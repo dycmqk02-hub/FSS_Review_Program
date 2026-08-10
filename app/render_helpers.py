@@ -141,6 +141,160 @@ def render_sum_check(container, findings):
         ).pack(fill="x", padx=12, pady=8)
 
 
+_CALC_CHECK_STMT_ORDER = ["재무상태표", "손익계산서", "자본변동표", "현금흐름표"]
+
+
+def _mismatch_table(container, mismatches):
+    table = ctk.CTkFrame(container, fg_color=theme.BG_CARD, corner_radius=10,
+                          border_width=1, border_color=theme.BORDER_SOFT)
+    table.pack(fill="x", pady=4, padx=4)
+    headers = ["구분", "대상", "기재값", "계산값", "차이", "하위항목"]
+    for c, h in enumerate(headers):
+        ctk.CTkLabel(table, text=h, font=theme.FONT_SUBTITLE, text_color=theme.TEXT_MAIN,
+                     anchor="w").grid(row=0, column=c, sticky="w", padx=8, pady=(8, 4))
+    for r, m in enumerate(mismatches[:60], start=1):
+        children_txt = ", ".join(m.get("children", [])[:6])
+        values = [m.get("period") or "-", m["parent"], f"{m['stated']:,.0f}",
+                  f"{m['computed']:,.0f}", f"{m['diff']:,.0f}", children_txt]
+        for c, v in enumerate(values):
+            ctk.CTkLabel(table, text=v, font=theme.FONT_SMALL, text_color=theme.TEXT_MAIN,
+                         fg_color=theme.ACCENT_CORAL, corner_radius=4,
+                         anchor="w" if c in (1, 5) else "e")\
+                .grid(row=r, column=c, sticky="ew", padx=2, pady=1, ipady=3, ipadx=4)
+    table.grid_columnconfigure(1, weight=3)
+    table.grid_columnconfigure(5, weight=3)
+    for c in (0, 2, 3, 4):
+        table.grid_columnconfigure(c, weight=1)
+    if len(mismatches) > 60:
+        empty_note(container, f"외 {len(mismatches) - 60}건 더 있습니다.")
+
+
+def render_calc_check(container, calc_check):
+    """calc_check: {"xbrl": {stmt:{"mismatches","skipped","note"}}|None, "pdf": {...}}
+    (XBRL은 업로드된 경우에만, PDF는 항상 존재)."""
+    section_title(container, "재무제표 계층별 합계검증 (leaf 합계 → 소계 → 최상위 총계, 전 레벨)")
+    sources = []
+    if calc_check.get("xbrl"):
+        sources.append(("XBRL(정밀 매칭)", calc_check["xbrl"], theme.ACCENT_MINT))
+    if calc_check.get("pdf"):
+        sources.append(("PDF 표(휴리스틱, 오탐 가능)", calc_check["pdf"], theme.ACCENT_PEACH))
+    if not sources:
+        empty_note(container, "검증 결과가 없습니다.")
+        return
+
+    total = sum(len(data.get(s, {}).get("mismatches", [])) for _l, data, _c in sources for s in _CALC_CHECK_STMT_ORDER)
+    badge(container, f"불일치 {total}건" if total else "전 재무제표 합계 일치",
+          theme.ACCENT_CORAL if total else theme.ACCENT_MINT).pack(anchor="w", padx=4, pady=(0, 6))
+
+    for stmt in _CALC_CHECK_STMT_ORDER:
+        if not any(data.get(stmt) for _l, data, _c in sources):
+            continue
+        section_title(container, stmt)
+        for src_label, data, src_color in sources:
+            stmt_data = data.get(stmt)
+            if not stmt_data:
+                continue
+            badge(container, src_label, src_color).pack(anchor="w", padx=4, pady=(2, 2))
+            note = stmt_data.get("note")
+            if note:
+                empty_note(container, note)
+                continue
+            mismatches = stmt_data.get("mismatches", [])
+            if not mismatches:
+                empty_note(container, "불일치 없음")
+            else:
+                _mismatch_table(container, mismatches)
+            skipped = stmt_data.get("skipped", [])
+            if skipped:
+                empty_note(container, f"하위 요소 값 누락으로 검증 불가 {len(skipped)}건 "
+                                       f"(일부 하위 요소를 원문에서 찾지 못함 - 주석 전용 요소일 수 있음)")
+
+
+def render_cross_check_fs(container, cross_check):
+    """cross_check: {"xbrl": [...]|None, "pdf": [...]}. 각 항목: {"item","values":[{"source",
+    "label","value"},...],"diff"}. 불일치 항목만 포함되어 있음(일치 항목은 이미 제외됨)."""
+    section_title(container, "FS간 교차검증 (동일 계정과목의 재무제표간 대사)")
+    sources = []
+    if cross_check.get("xbrl") is not None:
+        sources.append(("XBRL(정밀 매칭)", cross_check["xbrl"], theme.ACCENT_MINT))
+    if cross_check.get("pdf") is not None:
+        sources.append(("PDF 표(휴리스틱, 오탐 가능)", cross_check["pdf"], theme.ACCENT_PEACH))
+    if not sources:
+        empty_note(container, "검증 결과가 없습니다.")
+        return
+
+    total = sum(len(findings) for _l, findings, _c in sources)
+    badge(container, f"불일치 {total}건" if total else "교차검증 항목 모두 일치",
+          theme.ACCENT_CORAL if total else theme.ACCENT_MINT).pack(anchor="w", padx=4, pady=(0, 6))
+
+    for src_label, findings, src_color in sources:
+        badge(container, src_label, src_color).pack(anchor="w", padx=4, pady=(4, 2))
+        if not findings:
+            empty_note(container, "불일치 없음")
+            continue
+        for f in findings:
+            section_title(container, f["item"])
+            table = ctk.CTkFrame(container, fg_color=theme.BG_CARD, corner_radius=10,
+                                  border_width=1, border_color=theme.BORDER_SOFT)
+            table.pack(fill="x", pady=4, padx=4)
+            headers = ["출처", "라벨", "값"]
+            for c, h in enumerate(headers):
+                ctk.CTkLabel(table, text=h, font=theme.FONT_SUBTITLE, text_color=theme.TEXT_MAIN,
+                             anchor="w").grid(row=0, column=c, sticky="w", padx=8, pady=(8, 4))
+            for r, v in enumerate(f["values"], start=1):
+                cells = [v["source"], v["label"], f"{v['value']:,.0f}"]
+                for c, cell_v in enumerate(cells):
+                    ctk.CTkLabel(table, text=cell_v, font=theme.FONT_SMALL, text_color=theme.TEXT_MAIN,
+                                 fg_color=theme.ACCENT_CORAL, corner_radius=4, anchor="w" if c < 2 else "e")\
+                        .grid(row=r, column=c, sticky="ew", padx=2, pady=1, ipady=3, ipadx=4)
+            table.grid_columnconfigure(0, weight=2)
+            table.grid_columnconfigure(1, weight=2)
+            table.grid_columnconfigure(2, weight=1)
+
+
+def render_note_check(container, note_check):
+    """note_check: {"xbrl": {"cross_reference":{"confirmed","unmatched"},"calc_hierarchy":[...]}
+    |None, "pdf": {"amount_tracing":{"confirmed","unmatched"},"table_hierarchy":[...]}}."""
+    section_title(container, "주석(Note) 공시 대사")
+
+    xbrl = note_check.get("xbrl")
+    pdf = note_check.get("pdf") or {}
+
+    if xbrl:
+        badge(container, "XBRL(정밀 매칭)", theme.ACCENT_MINT).pack(anchor="w", padx=4, pady=(2, 2))
+        cr = xbrl.get("cross_reference") or {}
+        empty_note(container, f"확인됨 {cr.get('confirmed', 0)}건 (재무제표 계정과 동일 요소가 주석에도 "
+                               f"태깅됨) / 주석 미확인 {len(cr.get('unmatched', []))}건 "
+                               f"(주석에 해당 요소가 태깅되지 않음 - 서술식 설명만 있을 수 있어 반드시 누락은 아님)")
+        for u in cr.get("unmatched", [])[:60]:
+            row = card(container)
+            ctk.CTkLabel(row, text=f"[{u['stmt']}] {u['label']} ({u['element']}) = {u['value']:,.0f}",
+                         font=theme.FONT_SMALL, text_color=theme.TEXT_MAIN, anchor="w", justify="left",
+                         wraplength=780).pack(fill="x", padx=12, pady=6)
+        calc_hier = xbrl.get("calc_hierarchy") or []
+        section_title(container, "주석 내 계층별 합계검증 (Calculation Linkbase)")
+        if not calc_hier:
+            empty_note(container, "불일치 없음 (계산관계가 정의된 주석 role이 없거나 전부 일치).")
+        else:
+            _mismatch_table(container, [{**m, "parent": f"[{m['note']}] {m['parent']}"} for m in calc_hier])
+
+    badge(container, "PDF 표(휴리스틱, 오탐 가능)", theme.ACCENT_PEACH).pack(anchor="w", padx=4, pady=(6, 2))
+    at = pdf.get("amount_tracing") or {}
+    empty_note(container, f"확인됨 {at.get('confirmed', 0)}건 (재무제표 금액이 참조 주석 본문에 실제로 등장) / "
+                           f"주석 미확인 {len(at.get('unmatched', []))}건")
+    for u in at.get("unmatched", [])[:60]:
+        row = card(container)
+        ctk.CTkLabel(row, text=f"[{u['stmt']}] {u['label']} = {u['value']:,.0f}  (참조 주석: {', '.join(u['notes'])})",
+                     font=theme.FONT_SMALL, text_color=theme.TEXT_MAIN, anchor="w", justify="left",
+                     wraplength=780).pack(fill="x", padx=12, pady=6)
+    table_hier = pdf.get("table_hierarchy") or []
+    section_title(container, "주석 표 내 계층별 합계검증 (로마자/괄호숫자/총계류)")
+    if not table_hier:
+        empty_note(container, "불일치 없음 (또는 검증 가능한 로마자/괄호숫자 계층 구조가 있는 표가 없음).")
+    else:
+        _mismatch_table(container, [{**m, "parent": f"[{m['note']}] {m['parent']}"} for m in table_hier])
+
+
 def render_cross_check(container, findings):
     section_title(container, "동일 라벨 금액 교차대사 후보 (휴리스틱, 상위 항목만 표시)")
     if not findings:

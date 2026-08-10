@@ -11,6 +11,12 @@ from .rules.consol_vs_sep import compare_consol_separate
 from .rules.custom_checklist import load_custom_checklist
 from .rules.variance_analysis import build_variance_tables, apply_flags, detect_unit
 from .rules.xbrl_variance import build_variance_tables_from_xbrl
+from .rules.xbrl_calc_check import check_xbrl_calculations
+from .rules.xbrl_cross_check import check_cross_statement_xbrl
+from .rules.pdf_hierarchy_check import check_pdf_calculations
+from .rules.pdf_cross_check import check_cross_statement_pdf
+from .rules.xbrl_note_check import check_note_cross_reference, check_note_calc_hierarchy
+from .rules.pdf_note_check import check_note_amount_tracing, check_note_tables_hierarchy
 
 FS_TYPE_CHOICES = ["연결", "별도", "개별", "연결 vs 별도"]
 ACCOUNTING_STANDARD_CHOICES = ["KIFRS", "일반기업회계기준"]
@@ -53,6 +59,59 @@ def _variance_tables(doc: pdf_utils.PdfDocument, pm_threshold: float | None,
     return apply_flags(build_variance_tables(doc), pm_threshold), "PDF 표 휴리스틱"
 
 
+def _calc_check(doc: pdf_utils.PdfDocument, xbrl_source: str | None, xbrl_kind: str | None) -> dict:
+    """재무제표 계층별 합계검증(leaf 합계 -> 소계 -> 최상위 총계까지 전 레벨). PDF 기반은
+    항상 수행하고, XBRL이 추가로 제공되면 Calculation Linkbase 기반 정밀 검증도 함께 수행한다."""
+    result: dict = {"xbrl": None, "pdf": None}
+    if xbrl_source and xbrl_kind:
+        xbrl_result, err = check_xbrl_calculations(xbrl_source, xbrl_kind)
+        if not err:
+            result["xbrl"] = xbrl_result
+    try:
+        result["pdf"] = check_pdf_calculations(doc)
+    except Exception:  # noqa: BLE001
+        result["pdf"] = None
+    return result
+
+
+def _cross_check_fs(doc: pdf_utils.PdfDocument, xbrl_source: str | None, xbrl_kind: str | None) -> dict:
+    """FS간 교차검증(동일 계정과목이 여러 재무제표에 등장할 때 서로 일치하는지 대사).
+    PDF 기반은 항상 수행하고, XBRL이 추가로 제공되면 함께 수행한다."""
+    result: dict = {"xbrl": None, "pdf": None}
+    if xbrl_source and xbrl_kind:
+        xbrl_findings, err = check_cross_statement_xbrl(xbrl_source, xbrl_kind)
+        if not err:
+            result["xbrl"] = xbrl_findings
+    try:
+        result["pdf"] = check_cross_statement_pdf(doc)
+    except Exception:  # noqa: BLE001
+        result["pdf"] = None
+    return result
+
+
+def _note_check(doc: pdf_utils.PdfDocument, xbrl_source: str | None, xbrl_kind: str | None) -> dict:
+    """주석(note) 대사: (1) 재무제표 계정과 주석에 공시된 금액이 일치하는지 (2) 주석 내부에도
+    합계검증 대상(소계/총계 구조)이 있으면 함께 검증. PDF는 항상 수행하고, XBRL이 추가로
+    제공되면 Calculation Linkbase/요소 재사용 기반 정밀 검증도 함께 수행한다."""
+    result: dict = {
+        "xbrl": None,
+        "pdf": {"amount_tracing": {"confirmed": 0, "unmatched": []}, "table_hierarchy": []},
+    }
+    if xbrl_source and xbrl_kind:
+        cross_ref, err1 = check_note_cross_reference(xbrl_source, xbrl_kind)
+        calc_hier, err2 = check_note_calc_hierarchy(xbrl_source, xbrl_kind)
+        if not err1 and not err2:
+            result["xbrl"] = {"cross_reference": cross_ref, "calc_hierarchy": calc_hier}
+    try:
+        result["pdf"] = {
+            "amount_tracing": check_note_amount_tracing(doc),
+            "table_hierarchy": check_note_tables_hierarchy(doc),
+        }
+    except Exception:  # noqa: BLE001
+        pass
+    return result
+
+
 def _single_doc_review(doc: pdf_utils.PdfDocument, custom_items: list[dict], pm_threshold: float | None,
                         xbrl_source: str | None = None, xbrl_kind: str | None = None) -> dict:
     variance_tables, variance_source = _variance_tables(doc, pm_threshold, xbrl_source, xbrl_kind)
@@ -65,6 +124,9 @@ def _single_doc_review(doc: pdf_utils.PdfDocument, custom_items: list[dict], pm_
         "cross_check": cross_check_labels(doc.pages),
         "variance_tables": variance_tables,
         "variance_source": variance_source,
+        "calc_check": _calc_check(doc, xbrl_source, xbrl_kind),
+        "cross_check_fs": _cross_check_fs(doc, xbrl_source, xbrl_kind),
+        "note_check": _note_check(doc, xbrl_source, xbrl_kind),
         "detected_unit": detect_unit(doc.full_text),
         "pm_threshold": pm_threshold,
         "page_count": doc.page_count(),
