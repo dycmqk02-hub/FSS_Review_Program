@@ -677,6 +677,78 @@ def run_sep_con_compare(wb):
 
 
 # --------------------------------------------------------------------------
+# 결과 병합 - 기존 리뷰 파이프라인(PDF/XBRL 기반 계층별 합계검증·FS간 교차검증)과
+# 같은 형태로 변환해 "합계검증"/"연결 vs 별도" 탭 등에 하나로 합쳐 넣기 위한 어댑터.
+# --------------------------------------------------------------------------
+STMT_ORDER = ["재무상태표", "손익계산서", "자본변동표", "현금흐름표"]
+_SHEET_KIND_TO_STMT = {"BS": "재무상태표", "IS": "손익계산서", "CF": "현금흐름표", "SOCE": "자본변동표"}
+_SHEET_LABEL_TO_FS_KIND = {"별도": "separate", "연결": "consolidated"}
+
+
+def sheet_name_to_fs_kind_stmt(sheet_name):
+    """'별도_BS' -> ('separate', '재무상태표'), '연결_IS' -> ('consolidated', '손익계산서').
+    매칭되지 않으면 (None, None)."""
+    if "_" not in str(sheet_name):
+        return None, None
+    label, kind = str(sheet_name).split("_", 1)
+    return _SHEET_LABEL_TO_FS_KIND.get(label), _SHEET_KIND_TO_STMT.get(kind)
+
+
+def build_calc_check_from_excel(sum_results, fs_kind):
+    """sum_results(합계검증) 중 fs_kind(consolidated/separate)에 해당하는 시트의 불일치만
+    골라, XBRL/PDF 쪽과 동일한 {stmt: {"mismatches","skipped","note"}} 형태로 변환한다."""
+    result = {stmt: {"mismatches": [], "skipped": [], "note": None} for stmt in STMT_ORDER}
+    for r in sum_results:
+        if r.get("결과") != "불일치":
+            continue
+        kind, stmt = sheet_name_to_fs_kind_stmt(r.get("시트"))
+        if kind != fs_kind or stmt is None:
+            continue
+        result[stmt]["mismatches"].append({
+            "parent": r["계정과목"], "period": r.get("구간"), "segment": r.get("구분"),
+            "stated": r["표시값"], "computed": r["계산값"], "diff": r["차이"], "children": [],
+        })
+    return result
+
+
+def classify_recon_kind(sheet1, sheet2):
+    """대사규칙 한 행이 재무제표간/재무제표-주석간/주석간 중 무엇인지 시트명으로 판정."""
+    is_note1 = str(sheet1 or "").endswith("_주석")
+    is_note2 = str(sheet2 or "").endswith("_주석")
+    if is_note1 and is_note2:
+        return "주석간"
+    if is_note1 or is_note2:
+        return "재무제표-주석간"
+    return "재무제표간"
+
+
+def build_cross_check_from_excel(recon_results, fs_kind=None):
+    """recon_results(대사검증) 중 불일치만 골라 FS간 교차검증과 동일한
+    [{"item","values":[...],"diff"}, ...] 형태로 변환한다. fs_kind를 주면 값1/값2 중
+    최소 한쪽이 해당 구분(연결/별도) 시트인 행만 포함한다(별도 리뷰 실행 시 연결 전용
+    대사 규칙까지 뒤섞여 나오지 않도록)."""
+    findings = []
+    for r in recon_results:
+        if r.get("결과") != "불일치":
+            continue
+        ref1, ref2 = r.get("값1_참조") or {}, r.get("값2_참조") or {}
+        if fs_kind is not None:
+            kinds = {sheet_name_to_fs_kind_stmt(ref1.get("시트"))[0], sheet_name_to_fs_kind_stmt(ref2.get("시트"))[0]}
+            if fs_kind not in kinds:
+                continue
+        kind_label = classify_recon_kind(ref1.get("시트"), ref2.get("시트"))
+        findings.append({
+            "item": f"[{kind_label}] {r['검증명']}",
+            "values": [
+                {"source": ref1.get("시트") or "값1", "label": ref1.get("계정과목") or "", "value": r["값1"]},
+                {"source": ref2.get("시트") or "값2", "label": ref2.get("계정과목") or "", "value": r["값2"]},
+            ],
+            "diff": r.get("차이"),
+        })
+    return findings
+
+
+# --------------------------------------------------------------------------
 # 요약 / 리포트
 # --------------------------------------------------------------------------
 def summary_lines(file_path, sum_results, recon_results, compare_results):

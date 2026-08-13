@@ -84,6 +84,9 @@ class App(ctk.CTk):
         self.consol_pdf_path = None
         self.separate_pdf_path = None
         self.xbrl_source_path = None
+        self.excel_review_path = None
+        self.company_var = ctk.StringVar(value="")
+        self.period_var = ctk.StringVar(value="")
         self.last_result = None
 
         self._build_layout()
@@ -227,6 +230,57 @@ class App(ctk.CTk):
             wraplength=268,
         ).pack(fill="x", padx=22, pady=(2, 18))
 
+        # 옵션8: Excel 정밀검증 (선택) - fin-review-toolkit 이식. 사람이 직접 검토·수정한
+        # Excel 값을 기준으로 합계검증/대사검증/연결-별도비교를 수행해, 위 ⑥ PDF/⑦ XBRL 기반
+        # 자동 검증 결과와 같은 탭(합계검증/연결 vs 별도)에 함께 표시된다. ⑥에서 이미 올린
+        # PDF를 그대로 재사용하므로 여기서 PDF를 다시 올릴 필요가 없다.
+        ctk.CTkLabel(s, text="⑧ Excel 정밀검증 (선택)", font=theme.FONT_SUBTITLE,
+                     text_color=theme.TEXT_MAIN, anchor="w").pack(fill="x", padx=22, pady=(0, 4))
+        excel_frame = ctk.CTkFrame(s, fg_color=theme.BG_CARD, corner_radius=10,
+                                    border_width=1, border_color=theme.BORDER_SOFT)
+        excel_frame.pack(fill="x", padx=22, pady=(0, 4))
+
+        name_row = ctk.CTkFrame(excel_frame, fg_color="transparent")
+        name_row.pack(fill="x", padx=10, pady=(8, 4))
+        ctk.CTkLabel(name_row, text="회사명", font=theme.FONT_SMALL, text_color=theme.TEXT_SUB).pack(side="left")
+        ctk.CTkEntry(name_row, textvariable=self.company_var, width=90,
+                     placeholder_text="예: OO전자").pack(side="left", padx=(4, 10))
+        ctk.CTkLabel(name_row, text="기준년월", font=theme.FONT_SMALL, text_color=theme.TEXT_SUB).pack(side="left")
+        ctk.CTkEntry(name_row, textvariable=self.period_var, width=60,
+                     placeholder_text="2612").pack(side="left", padx=(4, 0))
+
+        self.excel_status_label = ctk.CTkLabel(excel_frame, text="선택 안 함 (미선택 시 Excel 정밀검증 생략)",
+                                                font=theme.FONT_SMALL, text_color=theme.TEXT_SUB, anchor="w",
+                                                wraplength=230, justify="left")
+        self.excel_status_label.pack(fill="x", padx=10, pady=(0, 4))
+
+        excel_btn_row1 = ctk.CTkFrame(excel_frame, fg_color="transparent")
+        excel_btn_row1.pack(fill="x", padx=10, pady=(0, 4))
+        ctk.CTkButton(excel_btn_row1, text="PDF로 초안 생성", width=104, corner_radius=8,
+                      fg_color=theme.ACCENT_SKY, hover_color=theme.ACCENT_SKY_DARK,
+                      text_color=theme.TEXT_MAIN, command=self._on_generate_excel_draft).pack(side="left")
+        ctk.CTkButton(excel_btn_row1, text="빈 템플릿", width=70, corner_radius=8,
+                      fg_color=theme.ACCENT_SKY, hover_color=theme.ACCENT_SKY_DARK,
+                      text_color=theme.TEXT_MAIN, command=self._on_create_excel_template).pack(side="left", padx=(6, 0))
+        excel_btn_row2 = ctk.CTkFrame(excel_frame, fg_color="transparent")
+        excel_btn_row2.pack(fill="x", padx=10, pady=(0, 8))
+        ctk.CTkButton(excel_btn_row2, text="검토 완료한 파일 선택", width=140, corner_radius=8,
+                      fg_color=theme.BG_SIDEBAR, hover_color=theme.BORDER_SOFT,
+                      text_color=theme.TEXT_MAIN, command=self._on_browse_excel_file).pack(side="left")
+        ctk.CTkButton(excel_btn_row2, text="지우기", width=60, corner_radius=8,
+                      fg_color=theme.BG_SIDEBAR, hover_color=theme.BORDER_SOFT,
+                      text_color=theme.TEXT_MAIN, command=self._clear_excel_review).pack(side="left", padx=(6, 0))
+        ctk.CTkLabel(
+            s, text="PDF로 초안을 만들면(위 ⑥에서 이미 올린 PDF 재사용) 저장 후 열어서\n"
+                    "원문과 대조·수정해야 합니다. 수정을 마친 뒤(또는 이미 검토가\n"
+                    "끝난 파일이 있으면) [▶ 리뷰 시작]을 누르면 그 Excel 내용을 매번\n"
+                    "새로 읽어 합계검증/대사검증/연결-별도비교에 반영합니다. 회사명·\n"
+                    "기준년월을 입력해 두면 완료 시 '회사명기준년월.xlsx'로 다운로드\n"
+                    "폴더에 검증 결과가 자동 저장됩니다(차이만 모은 하이퍼링크 시트 포함).",
+            font=theme.FONT_SMALL, text_color=theme.TEXT_SUB, anchor="w", justify="left",
+            wraplength=268,
+        ).pack(fill="x", padx=22, pady=(2, 18))
+
         # 설정 / 실행 버튼
         ctk.CTkButton(s, text="⚙ 참조자료 폴더 설정", corner_radius=10, height=38,
                       fg_color=theme.BG_CARD, hover_color=theme.BORDER_SOFT,
@@ -300,13 +354,6 @@ class App(ctk.CTk):
             self.scroll_frames[name] = frame
             rh.empty_note(frame, "리뷰를 시작하면 결과가 여기에 표시됩니다.")
 
-        # Excel 정밀검증 탭: "리뷰 시작"(PDF/XBRL 자동 파이프라인)과 무관하게 항상 동작하는
-        # 별도 워크플로우라 tab_names/scroll_frames(위 _render_result가 매번 지우는 대상)에는
-        # 넣지 않고, 앱 시작 시 한 번만 위젯을 만들어 독립적으로 상태를 유지한다.
-        self.tabview.add("Excel 정밀검증")
-        from .excel_review_ui import ExcelReviewPanel
-        self.excel_review_panel = ExcelReviewPanel(self.tabview.tab("Excel 정밀검증"))
-
     # ------------------------------------------------------------ 파일업로드
     def _rebuild_file_section(self):
         self._refresh_audit_hint()
@@ -365,6 +412,104 @@ class App(ctk.CTk):
         self.xbrl_path_label.configure(text="선택 안 함 (미선택 시 PDF 표 휴리스틱 사용)",
                                         text_color=theme.TEXT_SUB)
 
+    # ------------------------------------------------------------- Excel 정밀검증
+    def _excel_default_basename(self) -> str:
+        company = self.company_var.get().strip()
+        period = self.period_var.get().strip()
+        if company and period:
+            safe = "".join(c for c in f"{company}{period}" if c not in '\\/:*?"<>|').strip()
+            if safe:
+                return safe
+        return "review"
+
+    def _refresh_excel_status(self):
+        if self.excel_review_path:
+            self.excel_status_label.configure(text=f"파일: {os.path.basename(self.excel_review_path)}",
+                                               text_color=theme.ACCENT_MINT_DARK)
+        else:
+            self.excel_status_label.configure(text="선택 안 함 (미선택 시 Excel 정밀검증 생략)",
+                                               text_color=theme.TEXT_SUB)
+
+    def _on_generate_excel_draft(self):
+        if self.fs_type.get() == "연결 vs 별도":
+            sep_path, con_path = self.separate_pdf_path, self.consol_pdf_path
+        elif self.fs_type.get() == "연결":
+            sep_path, con_path = None, self.main_pdf_path
+        else:  # 별도/개별
+            sep_path, con_path = self.main_pdf_path, None
+        if not sep_path and not con_path:
+            mb.showwarning("파일 필요", "먼저 사이드바 ⑥에서 검토보고서 PDF를 선택해 주세요.\n"
+                                       "(같은 PDF를 여기서 다시 올릴 필요 없이 ⑥의 파일을 그대로 사용합니다)")
+            return
+        from .rules import excel_review_engine as xlengine
+        if xlengine.pdfplumber is None:
+            mb.showerror("안내", "PDF 자동 채움 기능을 사용하려면 pdfplumber 패키지가 필요합니다.")
+            return
+        try:
+            wb, counts = xlengine.build_workbook_from_pdfs(sep_path, con_path)
+        except Exception as e:  # noqa: BLE001
+            mb.showerror("오류", f"PDF 자동 추출 중 오류가 발생했습니다:\n{e}")
+            return
+
+        save_path = fd.asksaveasfilename(
+            title="자동 추출된 검토용 Excel 저장 (저장 후 열어서 원문과 대조·수정하십시오)",
+            defaultextension=".xlsx", initialfile=self._excel_default_basename() + ".xlsx",
+            filetypes=[("Excel 파일", "*.xlsx")],
+        )
+        if not save_path:
+            return
+        try:
+            wb.save(save_path)
+        except Exception as e:  # noqa: BLE001
+            mb.showerror("오류", f"저장 실패:\n{e}")
+            return
+
+        self.excel_review_path = save_path
+        self._refresh_excel_status()
+        summary = "\n".join(f"  - {k}: {v}건" for k, v in counts.items()) or "  (추출된 항목 없음)"
+        mb.showwarning(
+            "PDF 자동 추출 완료 - 검토 필수",
+            "재무상태표·손익계산서·현금흐름표 본문을 PDF에서 자동으로 읽어 Excel에 채웠습니다.\n\n"
+            f"{summary}\n\n"
+            "⚠️ 자동 추출은 참고용입니다. [▶ 리뷰 시작] 전에 저장된 파일을 열어 반드시 확인하세요:\n"
+            "  · 계정과목명/금액이 실제 PDF와 일치하는지 (각 행 '비고'에 원문 줄을 함께 넣어두었습니다)\n"
+            "  · 구분(세부/소계/합계) 분류가 올바른지\n"
+            "  · 자본변동표(SOCE)와 주석은 자동 추출되지 않으므로 직접 입력해야 합니다\n\n"
+            f"저장 위치: {save_path}\n\n"
+            "수정을 마쳤으면 [▶ 리뷰 시작]을 누르세요 - 저장한 파일을 다시 여는 절차 없이 "
+            "그대로 최신 내용을 읽어 검증합니다.",
+        )
+
+    def _on_create_excel_template(self):
+        from .rules import excel_review_engine as xlengine
+        path = fd.asksaveasfilename(
+            title="템플릿 저장 위치", defaultextension=".xlsx",
+            initialfile=self._excel_default_basename() + "_template.xlsx", filetypes=[("Excel 파일", "*.xlsx")],
+        )
+        if not path:
+            return
+        try:
+            xlengine.create_template(path)
+        except Exception as e:  # noqa: BLE001
+            mb.showerror("오류", f"템플릿 생성 실패:\n{e}")
+            return
+        self.excel_review_path = path
+        self._refresh_excel_status()
+        mb.showinfo("완료", f"템플릿을 생성했습니다:\n{path}\n\n"
+                            "Excel에서 열어 재무제표 숫자를 채운 뒤 [▶ 리뷰 시작]을 누르세요.")
+
+    def _on_browse_excel_file(self):
+        path = fd.askopenfilename(title="검토 완료한 Excel 정밀검증 파일 선택",
+                                   filetypes=[("Excel 파일", "*.xlsx;*.xlsm")])
+        if not path:
+            return
+        self.excel_review_path = path
+        self._refresh_excel_status()
+
+    def _clear_excel_review(self):
+        self.excel_review_path = None
+        self._refresh_excel_status()
+
     # ------------------------------------------------------------------ 설정
     def _open_settings(self):
         def on_save(new_settings):
@@ -410,7 +555,9 @@ class App(ctk.CTk):
             try:
                 result = run_review(report_type, fs_type, accounting_standard, files, self.settings,
                                      pm_consol=pm_consol, pm_separate=pm_separate,
-                                     xbrl_source=self.xbrl_source_path, progress_cb=progress_cb)
+                                     xbrl_source=self.xbrl_source_path, excel_path=self.excel_review_path,
+                                     company_name=self.company_var.get(), period=self.period_var.get(),
+                                     progress_cb=progress_cb)
             except Exception as e:  # noqa: BLE001
                 self.after(0, lambda: self._on_review_error(e))
                 return
@@ -445,6 +592,10 @@ class App(ctk.CTk):
         self.export_docx_btn.configure(state="normal")
         self.export_xlsx_btn.configure(state="normal" if not result.get("not_supported") else "disabled")
         self._render_result(result)
+        if result.get("excel_report_path"):
+            mb.showinfo("Excel 정밀검증 결과 저장 완료",
+                        f"합계검증/대사검증/연결-별도비교 결과를 저장했습니다:\n{result['excel_report_path']}\n\n"
+                        "맨 왼쪽 '차이요약' 시트에서 하이퍼링크를 클릭하면 원본 Excel의 해당 셀로 이동합니다.")
 
     # -------------------------------------------------------------- 렌더링
     def _render_result(self, result: dict):
@@ -566,7 +717,9 @@ class App(ctk.CTk):
         if is_dual:
             rh.render_consol_vs_sep(cvs_tab, sections["consol_vs_sep"])
         else:
-            rh.empty_note(cvs_tab, "옵션2에서 '연결 vs 별도'를 선택한 경우에만 표시됩니다.")
+            rh.empty_note(cvs_tab, "키워드/실무체크리스트 비교는 옵션2에서 '연결 vs 별도'를 선택한 "
+                                    "경우에만 표시됩니다.")
+        rh.render_excel_compare(cvs_tab, result.get("excel_compare"))
 
     def _render_summary_doc(self, parent, label, data):
         rh.doc_label_title(parent, f"{label} 요약")

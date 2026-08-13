@@ -69,12 +69,13 @@ def _render_single(title: str, data: dict) -> str:
     return "\n".join(lines)
 
 
-_CALC_CHECK_SOURCE_LABELS = {"xbrl": "XBRL(정밀 매칭)", "pdf": "PDF 표(휴리스틱, 오탐 가능)"}
+_CALC_CHECK_SOURCE_LABELS = {"xbrl": "XBRL(정밀 매칭)", "pdf": "PDF 표(휴리스틱, 오탐 가능)",
+                              "excel": "Excel(직접 검토, 가장 신뢰도 높음)"}
 
 
 def _render_calc_check(calc_check: dict) -> str:
     lines = ["  [재무제표 계층별 합계검증 - leaf 합계 -> 소계 -> 최상위 총계, 전 레벨]"]
-    sources = [(k, calc_check.get(k)) for k in ("xbrl", "pdf") if calc_check.get(k)]
+    sources = [(k, calc_check.get(k)) for k in ("xbrl", "pdf", "excel") if calc_check.get(k)]
     if not sources:
         lines.append("   - 검증 결과가 없습니다.")
         return "\n".join(lines)
@@ -106,7 +107,7 @@ def _render_calc_check(calc_check: dict) -> str:
 
 def _render_cross_check_fs(cross_check: dict) -> str:
     lines = ["  [FS간 교차검증 - 동일 계정과목의 재무제표간 대사]"]
-    sources = [(k, cross_check.get(k)) for k in ("xbrl", "pdf") if cross_check.get(k) is not None]
+    sources = [(k, cross_check.get(k)) for k in ("xbrl", "pdf", "excel") if cross_check.get(k) is not None]
     if not sources:
         lines.append("   - 검증 결과가 없습니다.")
         return "\n".join(lines)
@@ -201,6 +202,23 @@ def _render_consol_vs_sep(data: dict) -> str:
     return "\n".join(lines)
 
 
+def _render_excel_compare(compare_results: list | None) -> str:
+    lines = ["[연결-별도 비교 - Excel 정밀검증, 계정과목 단위]"]
+    if not compare_results:
+        lines.append("   - Excel 정밀검증 파일이 준비되지 않았습니다.")
+        return "\n".join(lines)
+    n_diff = sum(1 for r in compare_results if (r.get("차이") or 0) != 0)
+    lines.append(f"   - 비교 {len(compare_results)}건 중 차이 존재 {n_diff}건 (차이가 있다고 오류는 아님)")
+    for r in compare_results[:60]:
+        lines.append(f"   - [{r['구분표']}] {r['계정과목']}({r['기간']}): "
+                     f"별도 {r['별도']:,.0f} vs 연결 {r['연결']:,.0f} (차이 {r['차이']:,.0f})"
+                     if r.get("별도") is not None and r.get("연결") is not None else
+                     f"   - [{r['구분표']}] {r['계정과목']}({r['기간']}): 별도 {r.get('별도')} / 연결 {r.get('연결')}")
+    if len(compare_results) > 60:
+        lines.append(f"   - 외 {len(compare_results) - 60}건 (GUI 화면 또는 자동 저장된 Excel에서 전체 확인 가능)")
+    return "\n".join(lines)
+
+
 def _render_reference(ref_matches: dict, ref_sources: list) -> str:
     lines = ["[참조자료 자동 매칭 결과]"]
     for src in ref_sources or []:
@@ -241,6 +259,8 @@ def render_text_report(result: dict) -> str:
         lines.append("")
         lines.append(_render_single(f"[{result['fs_type']} {result['report_type']}보고서]", sections["single"]))
         lines.append("")
+        lines.append(_render_excel_compare(result.get("excel_compare")))
+        lines.append("")
         lines.append(_render_reference(sections.get("reference_matches", {}), result.get("ref_sources", [])))
     else:
         lines.append("")
@@ -249,6 +269,8 @@ def render_text_report(result: dict) -> str:
         lines.append(_render_single("[별도재무제표 검토보고서]", sections["separate"]))
         lines.append("")
         lines.append(_render_consol_vs_sep(sections["consol_vs_sep"]))
+        lines.append("")
+        lines.append(_render_excel_compare(result.get("excel_compare")))
         lines.append("")
         lines.append(_render_reference(sections.get("reference_matches", {}), result.get("ref_sources", [])))
 

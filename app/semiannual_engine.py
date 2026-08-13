@@ -17,6 +17,7 @@ from .rules.pdf_hierarchy_check import check_pdf_calculations
 from .rules.pdf_cross_check import check_cross_statement_pdf
 from .rules.xbrl_note_check import check_note_cross_reference, check_note_calc_hierarchy
 from .rules.pdf_note_check import check_note_amount_tracing, check_note_tables_hierarchy
+from .rules import excel_review_engine as xlengine
 
 FS_TYPE_CHOICES = ["연결", "별도", "개별", "연결 vs 별도"]
 ACCOUNTING_STANDARD_CHOICES = ["KIFRS", "일반기업회계기준"]
@@ -59,10 +60,56 @@ def _variance_tables(doc: pdf_utils.PdfDocument, pm_threshold: float | None,
     return apply_flags(build_variance_tables(doc), pm_threshold), "PDF 표 휴리스틱"
 
 
-def _calc_check(doc: pdf_utils.PdfDocument, xbrl_source: str | None, xbrl_kind: str | None) -> dict:
+def load_excel_verification(excel_path: str | None) -> dict | None:
+    """Excel 정밀검증 파일(① PDF로 초안 생성 또는 ② 템플릿으로 만들어 검토·수정한 파일)을
+    매번 디스크에서 새로 읽어 3대 검증(합계/대사/연결-별도)을 수행한다. 사용자가 Excel에서
+    방금 수정한 내용이 항상 반영되도록 인메모리 캐시를 두지 않는다. 실패해도 예외를 던지지
+    않고 None을 반환해 전체 리뷰가 중단되지 않게 한다."""
+    if not excel_path:
+        return None
+    try:
+        import openpyxl
+        wb = openpyxl.load_workbook(excel_path, data_only=True)
+        tolerance = 1
+        sum_results = xlengine.run_sum_verification(wb, tolerance)
+        lookup = xlengine.build_lookup(wb)
+        recon_results = xlengine.run_recon_verification(wb, lookup)
+        compare_results = xlengine.run_sep_con_compare(wb)
+    except Exception:  # noqa: BLE001
+        return None
+    return {"wb": wb, "path": excel_path, "sum_results": sum_results,
+            "recon_results": recon_results, "compare_results": compare_results}
+
+
+def _auto_save_excel_report(excel_data: dict | None, company_name: str | None, period: str | None) -> str | None:
+    """회사명·기준년월이 모두 입력되어 있으면 검증 결과(+ 차이요약 하이퍼링크 시트)를
+    '회사명기준년월.xlsx'로 다운로드 폴더에 자동 저장한다."""
+    if not excel_data or not company_name or not period:
+        return None
+    import os
+    company_name, period = company_name.strip(), period.strip()
+    if not company_name or not period:
+        return None
+    filename = "".join(c for c in f"{company_name}{period}" if c not in '\\/:*?"<>|').strip() + ".xlsx"
+    downloads = os.path.join(os.path.expanduser("~"), "Downloads")
+    try:
+        os.makedirs(downloads, exist_ok=True)
+        save_path = os.path.join(downloads, filename)
+        report_wb = xlengine.build_report_workbook(
+            excel_data["path"], excel_data["sum_results"], excel_data["recon_results"],
+            excel_data["compare_results"], source_wb=excel_data["wb"], source_path=excel_data["path"])
+        report_wb.save(save_path)
+    except Exception:  # noqa: BLE001
+        return None
+    return save_path
+
+
+def _calc_check(doc: pdf_utils.PdfDocument, xbrl_source: str | None, xbrl_kind: str | None,
+                 excel_data: dict | None, fs_kind: str | None) -> dict:
     """재무제표 계층별 합계검증(leaf 합계 -> 소계 -> 최상위 총계까지 전 레벨). PDF 기반은
-    항상 수행하고, XBRL이 추가로 제공되면 Calculation Linkbase 기반 정밀 검증도 함께 수행한다."""
-    result: dict = {"xbrl": None, "pdf": None}
+    항상 수행하고, XBRL이 추가로 제공되면 Calculation Linkbase 기반 정밀 검증도, Excel
+    정밀검증 파일이 준비되어 있으면(사람이 직접 검토한 값) 그 결과도 함께 수행한다."""
+    result: dict = {"xbrl": None, "pdf": None, "excel": None}
     if xbrl_source and xbrl_kind:
         xbrl_result, err = check_xbrl_calculations(xbrl_source, xbrl_kind)
         if not err:
@@ -71,13 +118,17 @@ def _calc_check(doc: pdf_utils.PdfDocument, xbrl_source: str | None, xbrl_kind: 
         result["pdf"] = check_pdf_calculations(doc)
     except Exception:  # noqa: BLE001
         result["pdf"] = None
+    if excel_data and fs_kind:
+        result["excel"] = xlengine.build_calc_check_from_excel(excel_data["sum_results"], fs_kind)
     return result
 
 
-def _cross_check_fs(doc: pdf_utils.PdfDocument, xbrl_source: str | None, xbrl_kind: str | None) -> dict:
+def _cross_check_fs(doc: pdf_utils.PdfDocument, xbrl_source: str | None, xbrl_kind: str | None,
+                     excel_data: dict | None, fs_kind: str | None) -> dict:
     """FS간 교차검증(동일 계정과목이 여러 재무제표에 등장할 때 서로 일치하는지 대사).
-    PDF 기반은 항상 수행하고, XBRL이 추가로 제공되면 함께 수행한다."""
-    result: dict = {"xbrl": None, "pdf": None}
+    PDF 기반은 항상 수행하고, XBRL/Excel이 추가로 제공되면 함께 수행한다. Excel 쪽은
+    '대사규칙' 시트에 등록한 규칙이라 재무제표간/재무제표-주석간/주석간을 모두 포함한다."""
+    result: dict = {"xbrl": None, "pdf": None, "excel": None}
     if xbrl_source and xbrl_kind:
         xbrl_findings, err = check_cross_statement_xbrl(xbrl_source, xbrl_kind)
         if not err:
@@ -86,6 +137,8 @@ def _cross_check_fs(doc: pdf_utils.PdfDocument, xbrl_source: str | None, xbrl_ki
         result["pdf"] = check_cross_statement_pdf(doc)
     except Exception:  # noqa: BLE001
         result["pdf"] = None
+    if excel_data and fs_kind:
+        result["excel"] = xlengine.build_cross_check_from_excel(excel_data["recon_results"], fs_kind)
     return result
 
 
@@ -113,7 +166,8 @@ def _note_check(doc: pdf_utils.PdfDocument, xbrl_source: str | None, xbrl_kind: 
 
 
 def _single_doc_review(doc: pdf_utils.PdfDocument, custom_items: list[dict], pm_threshold: float | None,
-                        xbrl_source: str | None = None, xbrl_kind: str | None = None) -> dict:
+                        xbrl_source: str | None = None, xbrl_kind: str | None = None,
+                        excel_data: dict | None = None) -> dict:
     variance_tables, variance_source = _variance_tables(doc, pm_threshold, xbrl_source, xbrl_kind)
     return {
         "checklist": evaluate_checklist(doc.full_text, custom_items),
@@ -124,8 +178,8 @@ def _single_doc_review(doc: pdf_utils.PdfDocument, custom_items: list[dict], pm_
         "cross_check": cross_check_labels(doc.pages),
         "variance_tables": variance_tables,
         "variance_source": variance_source,
-        "calc_check": _calc_check(doc, xbrl_source, xbrl_kind),
-        "cross_check_fs": _cross_check_fs(doc, xbrl_source, xbrl_kind),
+        "calc_check": _calc_check(doc, xbrl_source, xbrl_kind, excel_data, xbrl_kind),
+        "cross_check_fs": _cross_check_fs(doc, xbrl_source, xbrl_kind, excel_data, xbrl_kind),
         "note_check": _note_check(doc, xbrl_source, xbrl_kind),
         "detected_unit": detect_unit(doc.full_text),
         "pm_threshold": pm_threshold,
@@ -135,11 +189,16 @@ def _single_doc_review(doc: pdf_utils.PdfDocument, custom_items: list[dict], pm_
 
 def run_review(fs_type: str, accounting_standard: str, files: dict, settings: dict,
                pm_consol: float | None = None, pm_separate: float | None = None,
-               xbrl_source: str | None = None, progress_cb=None) -> dict:
+               xbrl_source: str | None = None, excel_path: str | None = None,
+               company_name: str | None = None, period: str | None = None, progress_cb=None) -> dict:
     """files: {'main': path} 또는 (연결 vs 별도) {'consol': path, 'separate': path}
     xbrl_source: XBRL zip 파일 또는 폴더 경로(선택). 제공되면 증감분석 시 PDF 표 휴리스틱 대신
     XBRL 인스턴스 문서에서 정밀 추출한 당기/전기 값을 사용한다(연결·별도 모두 같은 XBRL
     인스턴스 하나에 들어있으므로 업로드는 1회면 충분).
+    excel_path: Excel 정밀검증 파일 경로(선택, 사이드바에서 PDF로 초안 생성 또는 템플릿 생성
+    후 직접 검토·수정한 파일). 제공되면 합계검증/FS간 교차검증/연결-별도 비교에 그 결과를
+    함께 반영하고, company_name+period도 함께 주어지면 검증 결과를 '회사명기준년월.xlsx'로
+    다운로드 폴더에 자동 저장한다.
     progress_cb(msg: str, percent: float 0~100)가 주어지면 진행상황을 보고한다."""
 
     def report(msg, pct):
@@ -151,12 +210,18 @@ def run_review(fs_type: str, accounting_standard: str, files: dict, settings: di
     ref_sources_status = [{"label": label, "status": folder_status(folder)} for label, folder in ref_sources]
     ref_source_labels = " / ".join(label for label, _ in ref_sources)
 
+    if excel_path:
+        report("Excel 정밀검증 파일 읽는 중...", 2)
+    excel_data = load_excel_verification(excel_path)
+
     result = {
         "report_type": "분반기",
         "fs_type": fs_type,
         "accounting_standard": accounting_standard,
         "ref_sources": ref_sources_status,
         "not_supported": False,
+        "excel_compare": excel_data["compare_results"] if excel_data else None,
+        "excel_report_path": None,
         "sections": {},
     }
 
@@ -168,10 +233,10 @@ def run_review(fs_type: str, accounting_standard: str, files: dict, settings: di
 
         report("연결 검토보고서 체크리스트/의견/증감분석 스크리닝 중...", 18)
         result["sections"]["consol"] = _single_doc_review(
-            consol_doc, custom_items, pm_consol, xbrl_source, "consolidated")
+            consol_doc, custom_items, pm_consol, xbrl_source, "consolidated", excel_data)
         report("별도 검토보고서 체크리스트/의견/증감분석 스크리닝 중...", 26)
         result["sections"]["separate"] = _single_doc_review(
-            separate_doc, custom_items, pm_separate, xbrl_source, "separate")
+            separate_doc, custom_items, pm_separate, xbrl_source, "separate", excel_data)
 
         report("연결 vs 별도 특수관계자/내부거래 비교 중...", 32)
         result["sections"]["consol_vs_sep"] = compare_consol_separate(consol_doc.pages, separate_doc.pages)
@@ -195,7 +260,7 @@ def run_review(fs_type: str, accounting_standard: str, files: dict, settings: di
         pm = _resolve_pm(fs_type, pm_consol, pm_separate)
         xbrl_kind = FS_TYPE_TO_XBRL_KIND.get(fs_type)
         report("체크리스트/의견유형/비교표시/회계처리변경/증감분석 스크리닝 중...", 18)
-        result["sections"]["single"] = _single_doc_review(doc, custom_items, pm, xbrl_source, xbrl_kind)
+        result["sections"]["single"] = _single_doc_review(doc, custom_items, pm, xbrl_source, xbrl_kind, excel_data)
 
         kw_set = {f["keyword"] for f in result["sections"]["single"]["accounting_changes"]}
         if kw_set:
@@ -209,6 +274,10 @@ def run_review(fs_type: str, accounting_standard: str, files: dict, settings: di
         else:
             report("참조자료 매칭 대상 키워드 없음", 95)
             result["sections"]["reference_matches"] = {}
+
+    if excel_data:
+        report("Excel 정밀검증 결과 저장 중...", 98)
+        result["excel_report_path"] = _auto_save_excel_report(excel_data, company_name, period)
 
     report("완료", 100)
     return result

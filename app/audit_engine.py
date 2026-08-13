@@ -21,7 +21,8 @@ NOT_SUPPORTED_NOTE = (
 
 def run_review(fs_type: str, accounting_standard: str, files: dict, settings: dict,
                pm_consol: float | None = None, pm_separate: float | None = None,
-               xbrl_source: str | None = None, progress_cb=None) -> dict:
+               xbrl_source: str | None = None, excel_path: str | None = None,
+               company_name: str | None = None, period: str | None = None, progress_cb=None) -> dict:
     def report(msg, pct):
         if progress_cb:
             progress_cb(msg, pct)
