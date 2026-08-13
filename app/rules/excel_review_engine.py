@@ -12,6 +12,7 @@ import tempfile
 
 import openpyxl
 from openpyxl.styles import Font, PatternFill
+from openpyxl.worksheet.hyperlink import Hyperlink
 
 try:
     import pdfplumber
@@ -618,17 +619,22 @@ def run_recon_verification(wb, lookup):
         a = v1.get(str(c1).strip()) if v1 else None
         b = v2.get(str(c2).strip()) if v2 else None
 
+        # 값1/값2가 실제로 어느 시트·계정과목·컬럼에서 왔는지 함께 보관해둔다
+        # (차이 요약 시트의 하이퍼링크가 원본 셀을 정확히 찾아가려면 필요함).
+        ref1 = {"시트": s1, "계정과목": n1, "컬럼": c1} if s1 and n1 else None
+        ref2 = {"시트": s2, "계정과목": n2, "컬럼": c2} if s2 and n2 else None
+
         if a is None or b is None:
             results.append({
                 "검증명": str(name), "값1": a, "값2": b, "차이": None,
-                "결과": "데이터없음",
+                "결과": "데이터없음", "값1_참조": ref1, "값2_참조": ref2,
             })
             continue
         diff = a - b
         ok = abs(diff) <= tol
         results.append({
             "검증명": str(name), "값1": a, "값2": b, "차이": diff,
-            "결과": "일치" if ok else "불일치",
+            "결과": "일치" if ok else "불일치", "값1_참조": ref1, "값2_참조": ref2,
         })
     return results
 
@@ -743,7 +749,114 @@ def _write_report_sheet(ws, columns, rows):
     ws.freeze_panes = "A2"
 
 
-def build_report_workbook(file_path, sum_results, recon_results, compare_results):
+_STMT_COL_BY_PERIOD = {"당기": "C", "전기": "D"}
+
+
+def _find_account_row(ws, account_name):
+    """계정과목 열(A)에서 이름이 일치하는 첫 행 번호(1-based)를 찾는다. 못 찾으면 None."""
+    target = _norm_name(account_name)
+    for row in ws.iter_rows(min_row=2):
+        cell = row[0]
+        if cell.value is not None and _norm_name(cell.value) == target:
+            return cell.row
+    return None
+
+
+def _account_cell_location(wb, sheet_name, account_name, period):
+    """(시트, 계정과목, 기간)에 해당하는 원본 워크북 셀 위치를 "'시트명'!C15" 형태로 반환.
+    시트·행을 찾지 못하면 None."""
+    if not sheet_name or not account_name or not wb or sheet_name not in wb.sheetnames:
+        return None
+    row = _find_account_row(wb[sheet_name], account_name)
+    if row is None:
+        return None
+    col = _STMT_COL_BY_PERIOD.get(str(period).strip(), "C")
+    return f"'{sheet_name}'!{col}{row}"
+
+
+def build_diff_summary_rows(source_wb, sum_results, recon_results, compare_results):
+    """세 검증 결과 중 '차이가 있는' 항목만 모아 원본 셀 위치와 함께 반환한다.
+    returns [{"구분","내용","값1","값2","차이","위치1","위치2"}, ...] (위치는 "'시트'!C15" 형태
+    또는 원본에서 계정과목을 찾지 못하면 None)."""
+    rows = []
+    for r in sum_results:
+        if r.get("결과") != "불일치":
+            continue
+        rows.append({
+            "구분": "합계검증",
+            "내용": f"{r['시트']} / {r['계정과목']} ({r['구간']}, {r['구분']})",
+            "값1": r.get("표시값"), "값2": r.get("계산값"), "차이": r.get("차이"),
+            "위치1": _account_cell_location(source_wb, r.get("시트"), r.get("계정과목"), r.get("구간")),
+            "위치2": None,
+        })
+    for r in recon_results:
+        if r.get("결과") != "불일치":
+            continue
+        ref1, ref2 = r.get("값1_참조"), r.get("값2_참조")
+        loc1 = _account_cell_location(source_wb, ref1["시트"], ref1["계정과목"], ref1["컬럼"]) if ref1 else None
+        loc2 = _account_cell_location(source_wb, ref2["시트"], ref2["계정과목"], ref2["컬럼"]) if ref2 else None
+        rows.append({
+            "구분": "대사검증", "내용": r["검증명"],
+            "값1": r.get("값1"), "값2": r.get("값2"), "차이": r.get("차이"),
+            "위치1": loc1, "위치2": loc2,
+        })
+    sep_con_lookup = {label: (sep, con) for sep, con, label in SEP_CON_PAIRS}
+    for r in compare_results:
+        diff = r.get("차이")
+        if diff in (None, 0):
+            continue
+        sep_sheet, con_sheet = sep_con_lookup.get(r["구분표"], (None, None))
+        rows.append({
+            "구분": "연결-별도비교", "내용": f"{r['구분표']} / {r['계정과목']} ({r['기간']})",
+            "값1": r.get("별도"), "값2": r.get("연결"), "차이": diff,
+            "위치1": _account_cell_location(source_wb, sep_sheet, r["계정과목"], r["기간"]),
+            "위치2": _account_cell_location(source_wb, con_sheet, r["계정과목"], r["기간"]),
+        })
+    return rows
+
+
+def _to_file_uri(path: str) -> str:
+    return "file:///" + os.path.abspath(path).replace("\\", "/")
+
+
+def _write_diff_summary_sheet(ws, rows, source_path):
+    header_fill = PatternFill(start_color="BEE0F7", end_color="BEE0F7", fill_type="solid")
+    diff_fill = PatternFill(start_color="FBE1E1", end_color="FBE1E1", fill_type="solid")
+    columns = ("구분", "내용", "값1", "값2", "차이", "바로가기1", "바로가기2")
+
+    ws.append(list(columns))
+    for c in range(1, len(columns) + 1):
+        cell = ws.cell(row=1, column=c)
+        cell.font = Font(bold=True, color="1F3A5F")
+        cell.fill = header_fill
+
+    if not rows:
+        ws.append(["불일치 없음 - 합계검증/대사검증/연결-별도비교 모두 차이가 없습니다.", "", "", "", "", "", ""])
+    for row in rows:
+        ws.append([row["구분"], row["내용"], row.get("값1"), row.get("값2"), row.get("차이"), None, None])
+        r = ws.max_row
+        for c in range(1, 6):
+            ws.cell(row=r, column=c).fill = diff_fill
+        for col_idx, loc_key in ((6, "위치1"), (7, "위치2")):
+            loc = row.get(loc_key)
+            cell = ws.cell(row=r, column=col_idx)
+            if loc and source_path:
+                cell.value = "바로가기"
+                cell.hyperlink = Hyperlink(ref=cell.coordinate, target=_to_file_uri(source_path), location=loc)
+                cell.font = Font(color="0563C1", underline="single")
+            else:
+                cell.value = "-"
+
+    widths = {"구분": 14, "내용": 42, "값1": 16, "값2": 16, "차이": 16, "바로가기1": 12, "바로가기2": 12}
+    for c, col in enumerate(columns, start=1):
+        ws.column_dimensions[openpyxl.utils.get_column_letter(c)].width = widths[col]
+    ws.freeze_panes = "A2"
+
+
+def build_report_workbook(file_path, sum_results, recon_results, compare_results,
+                           source_wb=None, source_path=None):
+    """source_wb/source_path를 함께 주면 맨 왼쪽에 '차이요약' 시트를 추가한다 - 세 검증에서
+    나온 불일치/차이 항목만 모아 원본 파일의 해당 셀로 바로 이동하는 하이퍼링크를 붙인다."""
     wb = openpyxl.Workbook()
     summary_ws = wb.active
     summary_ws.title = "요약"
@@ -763,4 +876,11 @@ def build_report_workbook(file_path, sum_results, recon_results, compare_results
     _write_report_sheet(
         compare_ws, ("구분표", "계정과목", "기간", "별도", "연결", "차이"), compare_results,
     )
+
+    if source_wb is not None:
+        diff_rows = build_diff_summary_rows(source_wb, sum_results, recon_results, compare_results)
+        diff_ws = wb.create_sheet("차이요약", 0)
+        _write_diff_summary_sheet(diff_ws, diff_rows, source_path)
+        wb.active = 0
+
     return wb

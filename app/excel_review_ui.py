@@ -95,7 +95,7 @@ class ExcelReviewPanel:
                      text_color=theme.TEXT_SUB).pack(side="left")
         self.tol_var = tk.StringVar(value="1")
         ctk.CTkEntry(row2, textvariable=self.tol_var, width=60).pack(side="left", padx=(4, 16))
-        ctk.CTkLabel(row2, text="→ [③ 검증 실행] 완료 시 '회사명+기준년월.xlsm' 파일로 다운로드 폴더에 자동 저장됩니다.",
+        ctk.CTkLabel(row2, text="→ [③ 검증 실행] 완료 시 '회사명+기준년월.xlsx' 파일로 다운로드 폴더에 자동 저장됩니다.",
                      font=theme.FONT_SMALL, text_color=theme.TEXT_SUB).pack(side="left")
 
     # ---------------------------------------------------------------- 결과 탭
@@ -228,7 +228,7 @@ class ExcelReviewPanel:
             messagebox.showwarning(
                 "안내", "결과는 표시했지만 자동 저장은 건너뛰었습니다.\n"
                         "회사명과 기준년월(예: 2612)을 입력하면 검증 실행 시 결과가\n"
-                        "'회사명+기준년월.xlsm' 파일로 다운로드 폴더에 자동 저장됩니다.")
+                        "'회사명+기준년월.xlsx' 파일로 다운로드 폴더에 자동 저장됩니다.")
             return
 
         save_path = self._auto_save_report(company, period)
@@ -247,13 +247,14 @@ class ExcelReviewPanel:
         return "".join(c for c in name if c not in '\\/:*?"<>|').strip() or "검토결과"
 
     def _auto_save_report(self, company: str, period: str) -> str | None:
-        filename = self._sanitize_filename(f"{company}{period}") + ".xlsm"
+        filename = self._sanitize_filename(f"{company}{period}") + ".xlsx"
         downloads = os.path.join(os.path.expanduser("~"), "Downloads")
         try:
             os.makedirs(downloads, exist_ok=True)
             save_path = os.path.join(downloads, filename)
             wb = engine.build_report_workbook(self.excel_path, self.sum_results,
-                                               self.recon_results, self.compare_results)
+                                               self.recon_results, self.compare_results,
+                                               source_wb=self.wb, source_path=self.excel_path)
             wb.save(save_path)
         except Exception as e:  # noqa: BLE001
             messagebox.showerror("오류", f"검토 결과 자동 저장에 실패했습니다:\n{e}")
