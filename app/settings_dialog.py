@@ -35,10 +35,16 @@ class SettingsDialog(ctk.CTkToplevel):
         self.kifrs_var = ctk.StringVar(value=self.settings.get("kifrs_folder", ""))
         self.kifrs_early_var = ctk.StringVar(value=self.settings.get("kifrs_early_folder", ""))
         self.checklist_var = ctk.StringVar(value=self.settings.get("custom_checklist_path", ""))
+        self.checklist_kifrs_var = ctk.StringVar(value=self.settings.get("checklist_kifrs_path", ""))
+        self.checklist_kgaap_var = ctk.StringVar(value=self.settings.get("checklist_kgaap_path", ""))
 
         self._folder_row(body, "일반기업회계기준(K-GAAP) 폴더", self.kgaap_var)
         self._folder_row(body, "KIFRS 폴더 (시행중)", self.kifrs_var)
         self._folder_row(body, "KIFRS 폴더 (조기적용가능)", self.kifrs_early_var)
+        self._file_row(body, "공시사항점검표 8400 (KIFRS용, .xls)", self.checklist_kifrs_var,
+                       filetypes=[("Excel", "*.xls *.xlsx")])
+        self._file_row(body, "공시사항점검표 8400 (일반기준용, .xlsx)", self.checklist_kgaap_var,
+                       filetypes=[("Excel", "*.xls *.xlsx")])
         self._file_row(body, "커스텀 체크리스트 파일 (CSV/XLSX, 추후 추가 예정)", self.checklist_var)
 
         btn_row = ctk.CTkFrame(body, fg_color="transparent")
@@ -76,7 +82,7 @@ class SettingsDialog(ctk.CTkToplevel):
                        fg_color=theme.ACCENT_SKY, hover_color=theme.ACCENT_SKY_DARK,
                        text_color=theme.TEXT_MAIN, command=browse).pack(side="left", padx=(8, 0))
 
-    def _file_row(self, parent, label, var):
+    def _file_row(self, parent, label, var, filetypes=None):
         frame = ctk.CTkFrame(parent, fg_color=theme.BG_CARD, corner_radius=12,
                               border_width=1, border_color=theme.BORDER_SOFT)
         frame.pack(fill="x", padx=20, pady=6)
@@ -88,7 +94,7 @@ class SettingsDialog(ctk.CTkToplevel):
         entry.pack(side="left", fill="x", expand=True)
 
         def browse():
-            path = fd.askopenfilename(title=label, filetypes=[("CSV/Excel", "*.csv *.xlsx *.xls")])
+            path = fd.askopenfilename(title=label, filetypes=filetypes or [("CSV/Excel", "*.csv *.xlsx *.xls")])
             if path:
                 var.set(path)
 
@@ -101,5 +107,7 @@ class SettingsDialog(ctk.CTkToplevel):
         self.settings["kifrs_folder"] = self.kifrs_var.get().strip()
         self.settings["kifrs_early_folder"] = self.kifrs_early_var.get().strip()
         self.settings["custom_checklist_path"] = self.checklist_var.get().strip()
+        self.settings["checklist_kifrs_path"] = self.checklist_kifrs_var.get().strip()
+        self.settings["checklist_kgaap_path"] = self.checklist_kgaap_var.get().strip()
         self.on_save(self.settings)
         self.destroy()

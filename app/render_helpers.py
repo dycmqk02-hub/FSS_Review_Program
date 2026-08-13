@@ -257,6 +257,50 @@ def render_cross_check_fs(container, cross_check):
             table.grid_columnconfigure(2, weight=1)
 
 
+def render_disclosure_check(container, disclosure_check):
+    """disclosure_check: {"items":[{"section","reference","text","keywords","hits","found"}],
+    "path","error"}. 감사조서서식 8400 공시사항점검표(KIFRS/일반기준)와 보고서 본문을 키워드
+    기반으로 대사한 결과."""
+    section_title(container, "공시사항점검표 대사 (감사조서서식 8400)")
+    empty_note(container, "⚠️ 형태소 분석 없는 키워드 매칭 휴리스틱입니다 - 요구사항 문장이 "
+                           "추상적인 경우 오탐(실제로는 있는데 '미확인'으로 표시)이 있을 수 있습니다. "
+                           "반드시 '미확인' 항목을 원문·주석과 직접 대조하십시오.")
+    err = disclosure_check.get("error")
+    path = disclosure_check.get("path")
+    if err:
+        empty_note(container, f"{err}\n(⚙ 참조자료 폴더 설정에서 경로를 확인하세요)")
+        return
+    items = disclosure_check.get("items", [])
+    if not items:
+        empty_note(container, "대사할 공시사항점검표 항목이 없습니다.")
+        return
+
+    n_found = sum(1 for i in items if i["found"])
+    n_missing = len(items) - n_found
+    badge(container, f"확인 {n_found} / 미확인 {n_missing} (총 {len(items)}건)",
+          theme.ACCENT_CORAL if n_missing else theme.ACCENT_MINT).pack(anchor="w", padx=4, pady=(0, 4))
+    if path:
+        empty_note(container, f"점검표 파일: {path}")
+
+    missing = [i for i in items if not i["found"]]
+    by_section: dict[str, list] = {}
+    for i in missing:
+        by_section.setdefault(i.get("section") or "(섹션 미상)", []).append(i)
+
+    for sec, sec_items in by_section.items():
+        section_title(container, f"{sec} - 미확인 {len(sec_items)}건")
+        for i in sec_items[:40]:
+            row = card(container)
+            ctk.CTkLabel(row, text=f"[{i['reference']}]", font=theme.FONT_SMALL,
+                         text_color=theme.ACCENT_PRIMARY_HOVER, anchor="w").pack(fill="x", padx=12, pady=(8, 0))
+            ctk.CTkLabel(row, text=i["text"], font=theme.FONT_SMALL, text_color=theme.TEXT_MAIN,
+                         anchor="w", justify="left", wraplength=780).pack(fill="x", padx=12, pady=(2, 4))
+            ctk.CTkLabel(row, text=f"검색 키워드: {', '.join(i['keywords'])}", font=theme.FONT_SMALL,
+                         text_color=theme.TEXT_SUB, anchor="w").pack(fill="x", padx=12, pady=(0, 8))
+        if len(sec_items) > 40:
+            empty_note(container, f"외 {len(sec_items) - 40}건 더 있습니다.")
+
+
 def render_note_check(container, note_check):
     """note_check: {"xbrl": {"cross_reference":{"confirmed","unmatched"},"calc_hierarchy":[...]}
     |None, "pdf": {"amount_tracing":{"confirmed","unmatched"},"table_hierarchy":[...]}}."""

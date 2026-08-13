@@ -65,6 +65,7 @@ def _render_single(title: str, data: dict) -> str:
     lines.append(_render_calc_check(data.get("calc_check", {})))
     lines.append(_render_cross_check_fs(data.get("cross_check_fs", {})))
     lines.append(_render_note_check(data.get("note_check", {})))
+    lines.append(_render_disclosure_check(data.get("disclosure_check", {})))
 
     return "\n".join(lines)
 
@@ -156,6 +157,26 @@ def _render_note_check(note_check: dict) -> str:
         for m in table_hier[:40]:
             lines.append(f"       - [{m['note']}] '{m['parent']}': 기재값 {m['stated']:,.0f} "
                          f"vs 하위항목합계 {m['computed']:,.0f} (차이 {m['diff']:,.0f})")
+    return "\n".join(lines)
+
+
+def _render_disclosure_check(disclosure_check: dict) -> str:
+    lines = ["  [공시사항점검표 대사 - 감사조서서식 8400, 키워드 매칭 휴리스틱]"]
+    err = disclosure_check.get("error")
+    if err:
+        lines.append(f"   - {err}")
+        return "\n".join(lines)
+    items = disclosure_check.get("items", [])
+    if not items:
+        lines.append("   - 대사할 항목이 없습니다.")
+        return "\n".join(lines)
+    n_found = sum(1 for i in items if i["found"])
+    lines.append(f"   - 점검표: {disclosure_check.get('path')}")
+    lines.append(f"   - 확인 {n_found} / 미확인 {len(items) - n_found} (총 {len(items)}건)")
+    for i in items:
+        if i["found"]:
+            continue
+        lines.append(f"     - [{i.get('section') or ''}] [{i['reference']}] {i['text'][:100]}")
     return "\n".join(lines)
 
 

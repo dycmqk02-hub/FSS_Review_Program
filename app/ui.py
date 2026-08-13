@@ -343,7 +343,8 @@ class App(ctk.CTk):
         )
         self.tabview.pack(fill="both", expand=True, padx=24, pady=(0, 20))
 
-        self.tab_names = ["요약", "체크리스트", "숫자 스크리닝", "증감분석", "합계검증", "회계처리 변경", "참조자료", "연결 vs 별도"]
+        self.tab_names = ["요약", "체크리스트", "숫자 스크리닝", "증감분석", "합계검증", "공시사항점검",
+                          "회계처리 변경", "참조자료", "연결 vs 별도"]
         for name in self.tab_names:
             self.tabview.add(name)
 
@@ -697,6 +698,16 @@ class App(ctk.CTk):
             rh.render_calc_check(calc_tab, data.get("calc_check", {}))
             rh.render_cross_check_fs(calc_tab, data.get("cross_check_fs", {}))
             rh.render_note_check(calc_tab, data.get("note_check", {}))
+
+        # 공시사항점검 탭 (감사조서서식 8400 공시사항점검표 대사)
+        disc_tab = self.scroll_frames["공시사항점검"]
+        if is_dual:
+            rh.doc_label_title(disc_tab, "연결재무제표")
+            rh.render_disclosure_check(disc_tab, sections["consol"].get("disclosure_check", {}))
+            rh.doc_label_title(disc_tab, "별도재무제표")
+            rh.render_disclosure_check(disc_tab, sections["separate"].get("disclosure_check", {}))
+        else:
+            rh.render_disclosure_check(disc_tab, sections["single"].get("disclosure_check", {}))
 
         # 회계처리 변경 탭
         change_tab = self.scroll_frames["회계처리 변경"]

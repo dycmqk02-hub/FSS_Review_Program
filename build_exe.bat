@@ -23,6 +23,7 @@ echo [4/4] PyInstaller 빌드 중...
 pyinstaller --noconfirm --onefile --windowed ^
     --name FSS_ReviewProgram ^
     --collect-all customtkinter ^
+    --collect-all xlrd ^
     --add-data "resources;resources" ^
     main.py
 

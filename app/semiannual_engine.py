@@ -18,6 +18,7 @@ from .rules.pdf_cross_check import check_cross_statement_pdf
 from .rules.xbrl_note_check import check_note_cross_reference, check_note_calc_hierarchy
 from .rules.pdf_note_check import check_note_amount_tracing, check_note_tables_hierarchy
 from .rules import excel_review_engine as xlengine
+from .rules.disclosure_checklist import check_disclosure
 
 FS_TYPE_CHOICES = ["연결", "별도", "개별", "연결 vs 별도"]
 ACCOUNTING_STANDARD_CHOICES = ["KIFRS", "일반기업회계기준"]
@@ -167,7 +168,8 @@ def _note_check(doc: pdf_utils.PdfDocument, xbrl_source: str | None, xbrl_kind: 
 
 def _single_doc_review(doc: pdf_utils.PdfDocument, custom_items: list[dict], pm_threshold: float | None,
                         xbrl_source: str | None = None, xbrl_kind: str | None = None,
-                        excel_data: dict | None = None) -> dict:
+                        excel_data: dict | None = None, accounting_standard: str = "KIFRS",
+                        settings: dict | None = None) -> dict:
     variance_tables, variance_source = _variance_tables(doc, pm_threshold, xbrl_source, xbrl_kind)
     return {
         "checklist": evaluate_checklist(doc.full_text, custom_items),
@@ -181,6 +183,7 @@ def _single_doc_review(doc: pdf_utils.PdfDocument, custom_items: list[dict], pm_
         "calc_check": _calc_check(doc, xbrl_source, xbrl_kind, excel_data, xbrl_kind),
         "cross_check_fs": _cross_check_fs(doc, xbrl_source, xbrl_kind, excel_data, xbrl_kind),
         "note_check": _note_check(doc, xbrl_source, xbrl_kind),
+        "disclosure_check": check_disclosure(doc.full_text, accounting_standard, settings or {}),
         "detected_unit": detect_unit(doc.full_text),
         "pm_threshold": pm_threshold,
         "page_count": doc.page_count(),
@@ -233,10 +236,12 @@ def run_review(fs_type: str, accounting_standard: str, files: dict, settings: di
 
         report("연결 검토보고서 체크리스트/의견/증감분석 스크리닝 중...", 18)
         result["sections"]["consol"] = _single_doc_review(
-            consol_doc, custom_items, pm_consol, xbrl_source, "consolidated", excel_data)
+            consol_doc, custom_items, pm_consol, xbrl_source, "consolidated", excel_data,
+            accounting_standard, settings)
         report("별도 검토보고서 체크리스트/의견/증감분석 스크리닝 중...", 26)
         result["sections"]["separate"] = _single_doc_review(
-            separate_doc, custom_items, pm_separate, xbrl_source, "separate", excel_data)
+            separate_doc, custom_items, pm_separate, xbrl_source, "separate", excel_data,
+            accounting_standard, settings)
 
         report("연결 vs 별도 특수관계자/내부거래 비교 중...", 32)
         result["sections"]["consol_vs_sep"] = compare_consol_separate(consol_doc.pages, separate_doc.pages)
@@ -260,7 +265,8 @@ def run_review(fs_type: str, accounting_standard: str, files: dict, settings: di
         pm = _resolve_pm(fs_type, pm_consol, pm_separate)
         xbrl_kind = FS_TYPE_TO_XBRL_KIND.get(fs_type)
         report("체크리스트/의견유형/비교표시/회계처리변경/증감분석 스크리닝 중...", 18)
-        result["sections"]["single"] = _single_doc_review(doc, custom_items, pm, xbrl_source, xbrl_kind, excel_data)
+        result["sections"]["single"] = _single_doc_review(doc, custom_items, pm, xbrl_source, xbrl_kind, excel_data,
+                                                            accounting_standard, settings)
 
         kw_set = {f["keyword"] for f in result["sections"]["single"]["accounting_changes"]}
         if kw_set:
