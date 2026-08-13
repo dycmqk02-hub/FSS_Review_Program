@@ -300,6 +300,13 @@ class App(ctk.CTk):
             self.scroll_frames[name] = frame
             rh.empty_note(frame, "리뷰를 시작하면 결과가 여기에 표시됩니다.")
 
+        # Excel 정밀검증 탭: "리뷰 시작"(PDF/XBRL 자동 파이프라인)과 무관하게 항상 동작하는
+        # 별도 워크플로우라 tab_names/scroll_frames(위 _render_result가 매번 지우는 대상)에는
+        # 넣지 않고, 앱 시작 시 한 번만 위젯을 만들어 독립적으로 상태를 유지한다.
+        self.tabview.add("Excel 정밀검증")
+        from .excel_review_ui import ExcelReviewPanel
+        self.excel_review_panel = ExcelReviewPanel(self.tabview.tab("Excel 정밀검증"))
+
     # ------------------------------------------------------------ 파일업로드
     def _rebuild_file_section(self):
         self._refresh_audit_hint()
