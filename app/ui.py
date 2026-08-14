@@ -86,6 +86,9 @@ class App(ctk.CTk):
         self.xbrl_verify_var = ctk.BooleanVar(value=True)
         self.excel_review_path = None
         self.excel_verify_var = ctk.BooleanVar(value=True)
+        self.excel_use_pdf_draft_var = ctk.BooleanVar(value=False)
+        self.use_claude_var = ctk.BooleanVar(value=False)
+        self.use_gemini_var = ctk.BooleanVar(value=False)
         self.company_var = ctk.StringVar(value="")
         self.period_var = ctk.StringVar(value="")
         self.last_result = None
@@ -167,8 +170,8 @@ class App(ctk.CTk):
                      text_color=theme.TEXT_MAIN, anchor="w").pack(fill="x", padx=22, pady=(0, 6))
         opt3 = ctk.CTkSegmentedButton(
             s, values=ACCOUNTING_STANDARD_CHOICES, variable=self.accounting_standard,
-            fg_color=theme.BG_CARD, selected_color=theme.ACCENT_SKY_DARK,
-            selected_hover_color=theme.ACCENT_SKY_DARK, unselected_color=theme.BG_CARD,
+            fg_color=theme.BG_CARD, selected_color=theme.ACCENT_PRIMARY,
+            selected_hover_color=theme.ACCENT_PRIMARY_HOVER, unselected_color=theme.BG_CARD,
             unselected_hover_color=theme.BORDER_SOFT, text_color=theme.TEXT_MAIN,
             corner_radius=10,
         )
@@ -231,10 +234,12 @@ class App(ctk.CTk):
         excel_btn_row1.pack(fill="x", pady=(0, 10))
         excel_btn_font = ctk.CTkFont(family=theme.FONT_FAMILY, size=11)
         ctk.CTkFrame(excel_btn_row1, fg_color="transparent", width=1, height=1).pack(side="left", expand=True)
-        ctk.CTkButton(excel_btn_row1, text="PDF 그대로\n이용하기", width=110, height=42, corner_radius=8,
-                      font=excel_btn_font,
-                      fg_color=theme.ACCENT_SKY, hover_color=theme.ACCENT_SKY_DARK,
-                      text_color=theme.TEXT_MAIN, command=self._on_generate_excel_draft).pack(side="left")
+        self.excel_draft_btn = ctk.CTkButton(
+            excel_btn_row1, text="PDF 그대로\n이용하기", width=110, height=42, corner_radius=8,
+            font=excel_btn_font, border_width=2, border_color=theme.BORDER_SOFT,
+            fg_color=theme.BG_SIDEBAR, hover_color=theme.BORDER_SOFT, text_color=theme.TEXT_MAIN,
+            command=self._toggle_excel_draft)
+        self.excel_draft_btn.pack(side="left")
         ctk.CTkFrame(excel_btn_row1, fg_color="transparent", width=1, height=1).pack(side="left", expand=True)
         ctk.CTkButton(excel_btn_row1, text="보고서엑셀파일\n업로드하기", width=120, height=42, corner_radius=8,
                       font=excel_btn_font,
@@ -242,11 +247,12 @@ class App(ctk.CTk):
                       text_color=theme.TEXT_MAIN, command=self._on_upload_excel_file).pack(side="left")
         ctk.CTkFrame(excel_btn_row1, fg_color="transparent", width=1, height=1).pack(side="left", expand=True)
         ctk.CTkLabel(
-            s, text="[PDF 그대로 이용하기]를 누르면(위 ⑥에서 이미 올린 PDF 재사용) 자동 추출한 "
-                    "초안이 다운로드 폴더에 '..._초안.xlsx'로 바로 저장됩니다. 열어서 원문과 "
-                    "대조·수정한 뒤 [▶ 리뷰 시작]을 누르면 그 Excel 내용을 매번 새로 읽어 "
-                    "합계검증/대사검증/연결-별도비교에 반영합니다. 이미 검토·수정이 끝난 파일이 "
-                    "있으면 [보고서엑셀파일 업로드하기]로 바로 선택하십시오.",
+            s, text="[PDF 그대로 이용하기]를 선택해 두면(위 ⑥에서 이미 올린 PDF 재사용) [▶ 리뷰 "
+                    "시작]을 누르는 시점에 자동 추출한 초안을 다운로드 폴더에 '..._초안.xlsx'로 "
+                    "만들어 바로 검증에 사용합니다(선택은 1회용이라 완료 후 자동으로 꺼집니다). 이후 "
+                    "그 파일을 열어 원문과 대조·수정한 뒤 다시 [▶ 리뷰 시작]을 누르면 수정한 내용을 "
+                    "매번 새로 읽어 반영합니다. 이미 검토·수정이 끝난 파일이 있으면 처음부터 "
+                    "[보고서엑셀파일 업로드하기]로 선택하십시오.",
             font=theme.FONT_SMALL, text_color=theme.TEXT_SUB, anchor="w", justify="left",
             wraplength=268,
         ).pack(fill="x", padx=22, pady=(2, 18))
@@ -288,28 +294,31 @@ class App(ctk.CTk):
 
         # 옵션8: AI 심층 리뷰 (선택 - 규칙기반 검증과 별개, 사람처럼 PDF를 읽고 실질적
         # 회계 판단까지 수행. 외부 API 호출이 필요하며 ⑥에서 올린 PDF를 그대로 전송한다.
-        ctk.CTkLabel(s, text="⑧ AI 심층 리뷰 (선택, 외부 API 필요)", font=theme.FONT_SUBTITLE,
+        ctk.CTkLabel(s, text="⑧ AI심층리뷰 (선택, 외부 API 필요)", font=theme.FONT_SUBTITLE,
                      text_color=theme.TEXT_MAIN, anchor="w").pack(fill="x", padx=22, pady=(0, 4))
         ai_frame = ctk.CTkFrame(s, fg_color=theme.BG_CARD, corner_radius=10,
                                  border_width=1, border_color=theme.BORDER_SOFT)
         ai_frame.pack(fill="x", padx=22, pady=(0, 4))
         self.ai_status_label = ctk.CTkLabel(
-            ai_frame, text="⑥에서 올린 PDF를 그대로 API로 전송해 실질적 회계 판단까지 포함한 "
-                           "서술형 리뷰를 받습니다.",
+            ai_frame, text="아래에서 선택(둘 다 선택 가능)해 두면 [▶ 리뷰 시작] 실행 시 함께 "
+                           "호출되어, ⑥에서 올린 PDF를 그대로 API로 전송해 실질적 회계 판단까지 "
+                           "포함한 서술형 리뷰를 받습니다.",
             font=theme.FONT_SMALL, text_color=theme.TEXT_SUB, anchor="w",
             wraplength=250, justify="left")
         self.ai_status_label.pack(fill="x", padx=10, pady=(8, 4))
         ai_btn_font = ctk.CTkFont(family=theme.FONT_FAMILY, size=11)
-        ctk.CTkButton(ai_frame, text="Claude API 검증\n(유료, 보안위험 낮음)", height=42, corner_radius=8,
-                      font=ai_btn_font,
-                      fg_color=theme.ACCENT_SKY, hover_color=theme.ACCENT_SKY_DARK,
-                      text_color=theme.TEXT_MAIN, command=self._on_run_claude_review).pack(
-            fill="x", padx=10, pady=(0, 4))
-        ctk.CTkButton(ai_frame, text="Gemini API 검증\n(무료, 보안위험 높음)", height=42, corner_radius=8,
-                      font=ai_btn_font,
-                      fg_color=theme.ACCENT_PEACH, hover_color=theme.ACCENT_PEACH_DARK,
-                      text_color=theme.TEXT_MAIN, command=self._on_run_gemini_review).pack(
-            fill="x", padx=10, pady=(0, 10))
+        self.claude_review_btn = ctk.CTkButton(
+            ai_frame, text="Claude API 검증\n(유료, 보안위험 낮음)", height=42, corner_radius=8,
+            font=ai_btn_font, border_width=2, border_color=theme.BORDER_SOFT,
+            fg_color=theme.BG_SIDEBAR, hover_color=theme.BORDER_SOFT, text_color=theme.TEXT_MAIN,
+            command=lambda: self._toggle_ai_provider("Claude"))
+        self.claude_review_btn.pack(fill="x", padx=10, pady=(0, 4))
+        self.gemini_review_btn = ctk.CTkButton(
+            ai_frame, text="Gemini API 검증\n(무료, 보안위험 높음)", height=42, corner_radius=8,
+            font=ai_btn_font, border_width=2, border_color=theme.BORDER_SOFT,
+            fg_color=theme.BG_SIDEBAR, hover_color=theme.BORDER_SOFT, text_color=theme.TEXT_MAIN,
+            command=lambda: self._toggle_ai_provider("Gemini"))
+        self.gemini_review_btn.pack(fill="x", padx=10, pady=(0, 10))
         ctk.CTkLabel(
             s, text="회사 기밀 재무자료가 외부 API로 전송됩니다. Gemini 무료 티어는 데이터가 "
                     "모델 학습에 사용될 수 있어 보안위험이 있습니다. API 키는 프로그램 폴더의 "
@@ -403,8 +412,8 @@ class App(ctk.CTk):
             font=theme.FONT_BODY, wrap="word",
         )
         self.ai_review_textbox.place(relx=0, rely=0, relwidth=1, relheight=1)
-        self.ai_review_textbox.insert("1.0", "⑧에서 Claude API 또는 Gemini API 검증을 실행하면 "
-                                              "결과가 여기에 표시됩니다.")
+        self.ai_review_textbox.insert("1.0", "⑧에서 Claude API/Gemini API를 선택한 뒤 [▶ 리뷰 시작]을 "
+                                              "누르면 결과가 여기에 표시됩니다.")
         self.ai_review_textbox.configure(state="disabled")
         self.tab_pages["AI 심층분석"] = self.ai_review_textbox
 
@@ -476,44 +485,30 @@ class App(ctk.CTk):
         return "review"
 
     def _refresh_excel_status(self):
-        if self.excel_review_path:
+        if self.excel_use_pdf_draft_var.get():
+            self.excel_status_label.configure(
+                text="[▶ 리뷰 시작] 시 PDF에서 자동 추출해 사용 (1회용)",
+                text_color=theme.ACCENT_SKY_DARK)
+        elif self.excel_review_path:
             self.excel_status_label.configure(text=f"파일: {os.path.basename(self.excel_review_path)}",
                                                text_color=theme.ACCENT_MINT_DARK)
         else:
             self.excel_status_label.configure(text="미체크시, 정밀검증 생략",
                                                text_color=theme.TEXT_SUB)
 
-    def _on_generate_excel_draft(self):
-        if self.fs_type.get() == "연결 vs 별도":
-            sep_path, con_path = self.separate_pdf_path, self.consol_pdf_path
-        elif self.fs_type.get() == "연결":
-            sep_path, con_path = None, self.main_pdf_path
-        else:  # 별도/개별
-            sep_path, con_path = self.main_pdf_path, None
-        if not sep_path and not con_path:
-            mb.showwarning("파일 필요", "먼저 사이드바 ⑥에서 검토보고서 PDF를 선택해 주세요.\n"
-                                       "(같은 PDF를 여기서 다시 올릴 필요 없이 ⑥의 파일을 그대로 사용합니다)")
-            return
-        from .rules import excel_review_engine as xlengine
-        if xlengine.pdfplumber is None:
-            mb.showerror("안내", "PDF 자동 채움 기능을 사용하려면 pdfplumber 패키지가 필요합니다.")
-            return
-        try:
-            wb, _counts = xlengine.build_workbook_from_pdfs(sep_path, con_path)
-        except Exception as e:  # noqa: BLE001
-            mb.showerror("오류", f"PDF 자동 추출 중 오류가 발생했습니다:\n{e}")
-            return
+    def _refresh_excel_draft_button_style(self):
+        selected = self.excel_use_pdf_draft_var.get()
+        self.excel_draft_btn.configure(
+            fg_color=theme.ACCENT_SKY if selected else theme.BG_SIDEBAR,
+            border_color=theme.ACCENT_SKY_DARK if selected else theme.BORDER_SOFT,
+            hover_color=theme.ACCENT_SKY_DARK if selected else theme.BORDER_SOFT,
+        )
 
-        downloads = os.path.join(os.path.expanduser("~"), "Downloads")
-        try:
-            os.makedirs(downloads, exist_ok=True)
-            save_path = os.path.join(downloads, self._excel_default_basename() + "_초안.xlsx")
-            wb.save(save_path)
-        except Exception as e:  # noqa: BLE001
-            mb.showerror("오류", f"저장 실패:\n{e}")
-            return
-
-        self.excel_review_path = save_path
+    def _toggle_excel_draft(self):
+        self.excel_use_pdf_draft_var.set(not self.excel_use_pdf_draft_var.get())
+        if self.excel_use_pdf_draft_var.get():
+            self.excel_review_path = None
+        self._refresh_excel_draft_button_style()
         self._refresh_excel_status()
 
     def _on_upload_excel_file(self):
@@ -522,70 +517,55 @@ class App(ctk.CTk):
         if not path:
             return
         self.excel_review_path = path
+        self.excel_use_pdf_draft_var.set(False)
+        self._refresh_excel_draft_button_style()
         self._refresh_excel_status()
 
-    # -------------------------------------------------------------- AI 심층 리뷰
-    def _on_run_claude_review(self):
-        self._run_ai_review("Claude", ai_review.run_claude_review)
-
-    def _on_run_gemini_review(self):
-        self._run_ai_review("Gemini", ai_review.run_gemini_review)
-
-    def _run_ai_review(self, label, review_func):
+    def _generate_excel_draft_from_pdf(self) -> str:
+        """[PDF 그대로 이용하기] 선택 시 [▶ 리뷰 시작] 시점에 호출되어 PDF로부터 Excel
+        정밀검증 초안을 만들어 저장하고 그 경로를 반환한다. 실패하면 예외를 던진다."""
         if self.fs_type.get() == "연결 vs 별도":
-            if not self.consol_pdf_path or not self.separate_pdf_path:
-                mb.showwarning("파일 필요", "먼저 사이드바 ⑥에서 연결·별도 PDF를 모두 선택해 주세요.")
-                return
-            pdf_paths = [self.consol_pdf_path, self.separate_pdf_path]
-        else:
-            if not self.main_pdf_path:
-                mb.showwarning("파일 필요", "먼저 사이드바 ⑥에서 검토보고서 PDF를 선택해 주세요.")
-                return
-            pdf_paths = [self.main_pdf_path]
+            sep_path, con_path = self.separate_pdf_path, self.consol_pdf_path
+        elif self.fs_type.get() == "연결":
+            sep_path, con_path = None, self.main_pdf_path
+        else:  # 별도/개별
+            sep_path, con_path = self.main_pdf_path, None
+        if not sep_path and not con_path:
+            raise RuntimeError("먼저 사이드바 ⑥에서 검토보고서 PDF를 선택해 주세요.")
 
-        self.ai_status_label.configure(text=f"{label} API 호출 중... (문서 분량에 따라 수 분 소요될 수 있습니다)",
-                                        text_color=theme.TEXT_SUB)
+        from .rules import excel_review_engine as xlengine
+        if xlengine.pdfplumber is None:
+            raise RuntimeError("PDF 자동 채움 기능을 사용하려면 pdfplumber 패키지가 필요합니다.")
+        wb, _counts = xlengine.build_workbook_from_pdfs(sep_path, con_path)
 
-        def worker():
-            try:
-                text = review_func(pdf_paths)
-            except Exception as e:  # noqa: BLE001
-                self.after(0, lambda: self._on_ai_review_error(label, e))
-                return
-            self.after(0, lambda: self._on_ai_review_done(label, text))
+        downloads = os.path.join(os.path.expanduser("~"), "Downloads")
+        os.makedirs(downloads, exist_ok=True)
+        save_path = os.path.join(downloads, self._excel_default_basename() + "_초안.xlsx")
+        wb.save(save_path)
+        return save_path
 
-        threading.Thread(target=worker, daemon=True).start()
+    # -------------------------------------------------------------- AI 심층 리뷰
+    def _ai_provider_button(self, label):
+        return self.claude_review_btn if label == "Claude" else self.gemini_review_btn
 
-    def _on_ai_review_error(self, label, err: Exception):
-        self.ai_status_label.configure(
-            text="⑥에서 올린 PDF를 그대로 API로 전송해 실질적 회계 판단까지 포함한 서술형 "
-                 "리뷰를 받습니다.",
-            text_color=theme.TEXT_SUB)
-        quota_msg = ai_review.classify_quota_error(err)
-        if quota_msg:
-            mb.showwarning(f"{label} API 사용량 한도 초과", quota_msg)
-        else:
-            mb.showerror(f"{label} API 오류", f"{label} 리뷰 중 오류가 발생했습니다.\n\n{err}")
+    def _ai_provider_var(self, label):
+        return self.use_claude_var if label == "Claude" else self.use_gemini_var
 
-    def _on_ai_review_done(self, label, text: str):
-        self.ai_status_label.configure(text=f"{label} 리뷰 완료 (AI 심층분석 탭 확인)",
-                                        text_color=theme.ACCENT_MINT_DARK)
-        self.last_ai_reviews[label] = text
+    def _toggle_ai_provider(self, label):
+        var = self._ai_provider_var(label)
+        var.set(not var.get())
+        self._refresh_ai_button_style(label)
 
-        self.ai_review_textbox.configure(state="normal")
-        self.ai_review_textbox.delete("1.0", "end")
-        self.ai_review_textbox.insert("1.0", f"[{label} API 심층 리뷰]\n\n{text}")
-        self.ai_review_textbox.configure(state="disabled")
-        self.tab_bar.select("AI 심층분석")
-
-        if self.last_result is not None:
-            auto_path = self._auto_save_full_excel(self.last_result)
-            if auto_path:
-                mb.showinfo(f"{label} 리뷰 완료", f"AI 심층분석 결과를 반영해 다시 저장했습니다:\n{auto_path}")
-        else:
-            mb.showinfo(f"{label} 리뷰 완료",
-                        "AI 심층분석 탭에서 결과를 확인하세요.\n"
-                        "이후 [▶ 리뷰 시작]을 실행하면 이 결과도 함께 자동저장됩니다.")
+    def _refresh_ai_button_style(self, label):
+        btn = self._ai_provider_button(label)
+        selected = self._ai_provider_var(label).get()
+        accent = theme.ACCENT_SKY if label == "Claude" else theme.ACCENT_PEACH
+        accent_dark = theme.ACCENT_SKY_DARK if label == "Claude" else theme.ACCENT_PEACH_DARK
+        btn.configure(
+            fg_color=accent if selected else theme.BG_SIDEBAR,
+            border_color=accent_dark if selected else theme.BORDER_SOFT,
+            hover_color=accent_dark if selected else theme.BORDER_SOFT,
+        )
 
     # ------------------------------------------------------------------ 설정
     def _open_settings(self):
@@ -602,8 +582,10 @@ class App(ctk.CTk):
         accounting_standard = self.accounting_standard.get()
         pm_consol = _parse_pm(self.pm_consol_var.get())
         pm_separate = _parse_pm(self.pm_separate_var.get())
-        excel_path = self.excel_review_path if self.excel_verify_var.get() else None
         xbrl_source = self.xbrl_source_path if self.xbrl_verify_var.get() else None
+        use_excel = self.excel_verify_var.get()
+        use_pdf_draft = use_excel and self.excel_use_pdf_draft_var.get()
+        excel_path = self.excel_review_path if (use_excel and not use_pdf_draft) else None
 
         doc_word = "검토보고서" if report_type == "분반기" else "감사보고서"
         if fs_type == "연결 vs 별도":
@@ -611,11 +593,19 @@ class App(ctk.CTk):
                 mb.showwarning("파일 필요", f"연결·별도 {doc_word} PDF를 모두 선택해 주세요.")
                 return
             files = {"consol": self.consol_pdf_path, "separate": self.separate_pdf_path}
+            ai_pdf_paths = [self.consol_pdf_path, self.separate_pdf_path]
         else:
             if not self.main_pdf_path:
                 mb.showwarning("파일 필요", f"{doc_word} PDF를 선택해 주세요.")
                 return
             files = {"main": self.main_pdf_path}
+            ai_pdf_paths = [self.main_pdf_path]
+
+        ai_providers = []
+        if self.use_claude_var.get():
+            ai_providers.append(("Claude", ai_review.run_claude_review))
+        if self.use_gemini_var.get():
+            ai_providers.append(("Gemini", ai_review.run_gemini_review))
 
         self.settings["last_report_type"] = report_type
         self.settings["last_fs_type"] = fs_type
@@ -629,6 +619,16 @@ class App(ctk.CTk):
             self.after(0, lambda: self._set_progress_ui(msg, percent))
 
         def worker():
+            nonlocal excel_path
+            if use_pdf_draft:
+                progress_cb("PDF에서 Excel 정밀검증 초안 생성 중...", 1)
+                try:
+                    excel_path = self._generate_excel_draft_from_pdf()
+                except Exception as e:  # noqa: BLE001
+                    self.after(0, lambda: self._on_review_error(e))
+                    return
+                self.after(0, lambda: self._on_excel_draft_generated(excel_path))
+
             try:
                 result = run_review(report_type, fs_type, accounting_standard, files, self.settings,
                                      pm_consol=pm_consol, pm_separate=pm_separate,
@@ -638,9 +638,26 @@ class App(ctk.CTk):
             except Exception as e:  # noqa: BLE001
                 self.after(0, lambda: self._on_review_error(e))
                 return
-            self.after(0, lambda: self._on_review_done(result))
+
+            ai_reviews, ai_errors = {}, {}
+            for label, review_func in ai_providers:
+                progress_cb(f"{label} API 심층 리뷰 호출 중... (수 분 소요될 수 있습니다)", 99)
+                try:
+                    ai_reviews[label] = review_func(ai_pdf_paths)
+                except Exception as e:  # noqa: BLE001
+                    ai_errors[label] = e
+
+            self.after(0, lambda: self._on_review_done(result, ai_reviews, ai_errors))
 
         threading.Thread(target=worker, daemon=True).start()
+
+    def _on_excel_draft_generated(self, path: str):
+        # 생성은 1회용 선택이었으므로, 다음 리뷰부터는 방금 만든 파일을 다시 추출하지 않고
+        # 그대로(사용자가 수정했다면 그 내용을) 재사용하도록 "업로드된 파일" 상태로 전환한다.
+        self.excel_review_path = path
+        self.excel_use_pdf_draft_var.set(False)
+        self._refresh_excel_draft_button_style()
+        self._refresh_excel_status()
 
     def _set_progress_ui(self, msg: str, percent: float):
         percent = max(0.0, min(100.0, percent))
@@ -658,7 +675,7 @@ class App(ctk.CTk):
         self.status_label.configure(text=f"오류: {err}")
         mb.showerror("리뷰 실패", f"PDF 분석 중 오류가 발생했습니다.\n\n{err}")
 
-    def _on_review_done(self, result: dict):
+    def _on_review_done(self, result: dict, ai_reviews: dict | None = None, ai_errors: dict | None = None):
         self.progress.pack_forget()
         self.run_btn.configure(state="normal", text="✓ 리뷰완료",
                                 fg_color=theme.ACCENT_PRIMARY_DEEP, hover_color=theme.ACCENT_PRIMARY_DEEP,
@@ -667,6 +684,15 @@ class App(ctk.CTk):
         self.last_result = result
         self.export_xlsx_btn.configure(state="normal")
         self._render_result(result)
+
+        if ai_reviews:
+            self.last_ai_reviews.update(ai_reviews)
+            self.ai_review_textbox.configure(state="normal")
+            self.ai_review_textbox.delete("1.0", "end")
+            sections = [f"[{lbl} API 심층 리뷰]\n\n{txt}" for lbl, txt in self.last_ai_reviews.items()]
+            separator = "\n\n" + "=" * 60 + "\n\n"
+            self.ai_review_textbox.insert("1.0", separator.join(sections))
+            self.ai_review_textbox.configure(state="disabled")
 
         auto_path = self._auto_save_full_excel(result)
         if auto_path:
@@ -677,6 +703,13 @@ class App(ctk.CTk):
         else:
             mb.showwarning("자동 저장 실패", "리뷰 결과 Excel 자동 저장에 실패했습니다.\n"
                                           "우측 상단 'Excel로 저장' 버튼으로 수동 저장해 주세요.")
+
+        for label, err in (ai_errors or {}).items():
+            quota_msg = ai_review.classify_quota_error(err)
+            if quota_msg:
+                mb.showwarning(f"{label} API 사용량 한도 초과", quota_msg)
+            else:
+                mb.showerror(f"{label} API 오류", f"{label} 심층 리뷰 중 오류가 발생했습니다.\n\n{err}")
 
         self.next_review_frame.pack(fill="x", padx=22, pady=(6, 10), after=self.status_label)
 
@@ -698,20 +731,22 @@ class App(ctk.CTk):
         self.xbrl_verify_var.set(True)
         self.excel_review_path = None
         self.excel_verify_var.set(True)
+        self.excel_use_pdf_draft_var.set(False)
+        self.use_claude_var.set(False)
+        self.use_gemini_var.set(False)
         self.last_result = None
         self.last_ai_reviews = {}
 
         self._rebuild_file_section()
         self._refresh_excel_status()
+        self._refresh_excel_draft_button_style()
+        self._refresh_ai_button_style("Claude")
+        self._refresh_ai_button_style("Gemini")
         self.xbrl_path_label.configure(text="미체크시, XBRL활용 증감분석 생략", text_color=theme.TEXT_SUB)
-        self.ai_status_label.configure(
-            text="⑥에서 올린 PDF를 그대로 API로 전송해 실질적 회계 판단까지 포함한 서술형 "
-                 "리뷰를 받습니다.",
-            text_color=theme.TEXT_SUB)
         self.ai_review_textbox.configure(state="normal")
         self.ai_review_textbox.delete("1.0", "end")
-        self.ai_review_textbox.insert("1.0", "⑧에서 Claude API 또는 Gemini API 검증을 실행하면 "
-                                              "결과가 여기에 표시됩니다.")
+        self.ai_review_textbox.insert("1.0", "⑧에서 Claude API/Gemini API를 선택한 뒤 [▶ 리뷰 시작]을 "
+                                              "누르면 결과가 여기에 표시됩니다.")
         self.ai_review_textbox.configure(state="disabled")
 
         for frame in self.scroll_frames.values():

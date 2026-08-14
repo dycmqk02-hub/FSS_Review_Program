@@ -30,9 +30,15 @@ class WrappingTabBar(ctk.CTkFrame):
                 command=lambda n=name: self.select(n),
             )
             self.buttons[name] = btn
-        self._last_width = 0
-        self.bind("<Configure>", lambda e: self._relayout(e.width))
+        self._relayout_after_id = None
+        # 위젯 자신뿐 아니라 최상위 창의 <Configure>도 함께 구독한다. CTkButton은 생성 직후
+        # winfo_reqwidth()가 아직 DPI 스케일링이 100% 반영되지 않은 값을 돌려줄 수 있어,
+        # 첫 배치 이후에도 한 번 더 재계산해 최종 크기로 맞춘다(캐시 없이 매번 재계산).
+        self.bind("<Configure>", self._schedule_relayout)
+        self.winfo_toplevel().bind("<Configure>", self._schedule_relayout, add="+")
         self.select(self.tab_names[0], notify=False)
+        self._schedule_relayout()
+        self.after(250, self._schedule_relayout)
 
     def select(self, name, notify=True):
         self.active = name
@@ -46,18 +52,32 @@ class WrappingTabBar(ctk.CTkFrame):
         if notify:
             self._on_select_cb(name)
 
-    def _relayout(self, width):
-        if width <= 1 or width == self._last_width:
-            return
-        self._last_width = width
+    def _schedule_relayout(self, event=None):
+        if self._relayout_after_id is not None:
+            self.after_cancel(self._relayout_after_id)
+        self._relayout_after_id = self.after(20, self._relayout_now)
+
+    def _relayout_now(self):
+        self._relayout_after_id = None
         self.update_idletasks()
+        self._relayout(self.winfo_width())
+
+    def _relayout(self, width):
+        if width <= 1:
+            return
+        # CTk의 place()는 x/y를 위젯 스케일링(DPI) 비율만큼 다시 곱해서 넘긴다. winfo_reqwidth()는
+        # 이미 스케일이 적용된 실제 픽셀값이므로, 그대로 누적해 place(x=..)에 넘기면 이중으로
+        # 배율이 걸려 오른쪽으로 갈수록 어긋난다 - 전부 스케일 적용 전(논리) 단위로 계산한다.
+        scaling = self._get_widget_scaling()
+        logical_width = width / scaling
         x = y = 0
         pad_x, pad_y = 6, 6
         row_h = 0
         for name in self.tab_names:
             btn = self.buttons[name]
-            req_w, req_h = btn.winfo_reqwidth(), btn.winfo_reqheight()
-            if x + req_w > width and x > 0:
+            req_w = btn.winfo_reqwidth() / scaling
+            req_h = btn.winfo_reqheight() / scaling
+            if x + req_w > logical_width and x > 0:
                 x = 0
                 y += row_h + pad_y
                 row_h = 0

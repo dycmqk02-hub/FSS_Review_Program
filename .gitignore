@@ -1,6 +1,7 @@
 .venv/
 build/
-dist/
+dist/*
+!dist/FSS_ReviewProgram.exe
 __pycache__/
 *.pyc
 config.json
