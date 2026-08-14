@@ -936,17 +936,11 @@ def _write_diff_summary_sheet(ws, rows, source_path):
     ws.freeze_panes = "A2"
 
 
-def build_report_workbook(file_path, sum_results, recon_results, compare_results,
-                           source_wb=None, source_path=None):
-    """source_wb/source_path를 함께 주면 맨 왼쪽에 '차이요약' 시트를 추가한다 - 세 검증에서
-    나온 불일치/차이 항목만 모아 원본 파일의 해당 셀로 바로 이동하는 하이퍼링크를 붙인다."""
-    wb = openpyxl.Workbook()
-    summary_ws = wb.active
-    summary_ws.title = "요약"
-    for line in summary_lines(file_path, sum_results, recon_results, compare_results):
-        summary_ws.append([line])
-    summary_ws.column_dimensions["A"].width = 100
-
+def add_verification_sheets(wb, sum_results, recon_results, compare_results,
+                             source_wb=None, source_path=None) -> None:
+    """기존 워크북에 합계검증/대사검증/연결-별도비교 상세 시트를 추가한다. source_wb/source_path를
+    함께 주면 맨 왼쪽에 '차이요약' 시트도 추가한다 - 세 검증에서 나온 불일치/차이 항목만 모아
+    원본 파일의 해당 셀로 바로 이동하는 하이퍼링크를 붙인다."""
     sum_ws = wb.create_sheet("합계검증")
     _write_report_sheet(
         sum_ws, ("시트", "구간", "계정과목", "구분", "표시값", "계산값", "차이", "결과"), sum_results,
@@ -966,4 +960,16 @@ def build_report_workbook(file_path, sum_results, recon_results, compare_results
         _write_diff_summary_sheet(diff_ws, diff_rows, source_path)
         wb.active = 0
 
+
+def build_report_workbook(file_path, sum_results, recon_results, compare_results,
+                           source_wb=None, source_path=None):
+    wb = openpyxl.Workbook()
+    summary_ws = wb.active
+    summary_ws.title = "요약"
+    for line in summary_lines(file_path, sum_results, recon_results, compare_results):
+        summary_ws.append([line])
+    summary_ws.column_dimensions["A"].width = 100
+
+    add_verification_sheets(wb, sum_results, recon_results, compare_results,
+                             source_wb=source_wb, source_path=source_path)
     return wb

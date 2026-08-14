@@ -7,10 +7,9 @@ import tkinter.messagebox as mb
 
 import customtkinter as ctk
 
-from . import theme, settings, render_helpers as rh
+from . import theme, settings, render_helpers as rh, ai_review
 from .review_engine import run_review, REPORT_TYPE_CHOICES, FS_TYPE_CHOICES, ACCOUNTING_STANDARD_CHOICES
-from .report_render import export_txt, export_docx
-from .variance_export import export_variance_excel
+from .variance_export import export_full_excel
 from .settings_dialog import SettingsDialog
 
 ctk.set_appearance_mode("light")
@@ -77,17 +76,20 @@ class App(ctk.CTk):
         self.report_type = ctk.StringVar(value=self.settings.get("last_report_type", "분반기"))
         self.fs_type = ctk.StringVar(value=self.settings.get("last_fs_type", "연결"))
         self.accounting_standard = ctk.StringVar(value=self.settings.get("last_accounting_standard", "KIFRS"))
-        self.pm_consol_var = ctk.StringVar(value=self.settings.get("last_pm_consol", ""))
-        self.pm_separate_var = ctk.StringVar(value=self.settings.get("last_pm_separate", ""))
+        self.pm_consol_var = ctk.StringVar(value="")
+        self.pm_separate_var = ctk.StringVar(value="")
 
         self.main_pdf_path = None
         self.consol_pdf_path = None
         self.separate_pdf_path = None
         self.xbrl_source_path = None
+        self.xbrl_verify_var = ctk.BooleanVar(value=True)
         self.excel_review_path = None
+        self.excel_verify_var = ctk.BooleanVar(value=True)
         self.company_var = ctk.StringVar(value="")
         self.period_var = ctk.StringVar(value="")
         self.last_result = None
+        self.last_ai_reviews = {}
 
         self._build_layout()
         self._rebuild_file_section()
@@ -115,6 +117,18 @@ class App(ctk.CTk):
                      text_color=theme.TEXT_MAIN, anchor="w").pack(fill="x", padx=22, pady=(26, 2))
         ctk.CTkLabel(s, text="Big4 품질관리실 사전리뷰 보조도구", font=theme.FONT_SMALL,
                      text_color=theme.TEXT_SUB, anchor="w").pack(fill="x", padx=22, pady=(0, 20))
+
+        # 회사명 / 기준년월 (Excel 정밀검증 PDF 초안·결과파일명에 사용)
+        ctk.CTkLabel(s, text="회사명 / 기준년월", font=theme.FONT_SUBTITLE,
+                     text_color=theme.TEXT_MAIN, anchor="w").pack(fill="x", padx=22, pady=(0, 6))
+        name_row = ctk.CTkFrame(s, fg_color="transparent")
+        name_row.pack(fill="x", padx=22, pady=(0, 18))
+        ctk.CTkLabel(name_row, text="회사명", font=theme.FONT_SMALL, text_color=theme.TEXT_SUB).pack(side="left")
+        ctk.CTkEntry(name_row, textvariable=self.company_var, width=90,
+                     placeholder_text="예: OO전자").pack(side="left", padx=(4, 10))
+        ctk.CTkLabel(name_row, text="기준년월", font=theme.FONT_SMALL, text_color=theme.TEXT_SUB).pack(side="left")
+        ctk.CTkEntry(name_row, textvariable=self.period_var, width=60,
+                     placeholder_text="2612").pack(side="left", padx=(4, 0))
 
         # 옵션1: 보고서 종류
         ctk.CTkLabel(s, text="① 보고서 종류", font=theme.FONT_SUBTITLE,
@@ -182,101 +196,125 @@ class App(ctk.CTk):
         pm_entry2.pack(fill="x")
         _bind_thousands_separator(pm_entry2, self.pm_separate_var)
         ctk.CTkLabel(
-            s, text="개별재무제표는 ④(연결PM)값을 사용합니다.\n"
-                    "미입력 시 금액차이 음영은 표시되지 않으며,\n"
-                    "증감률 5% 음영은 항상 적용됩니다. (단위는\n"
-                    "재무제표 표시단위와 동일하게 입력하십시오)",
+            s, text="개별재무제표는 ④(연결PM)값을 사용합니다. 미입력 시 금액차이 음영은 "
+                    "표시되지 않습니다. (단위는 재무제표 표시단위와 동일하게 입력하십시오)",
             font=theme.FONT_SMALL, text_color=theme.TEXT_SUB, anchor="w", justify="left",
             wraplength=268,
         ).pack(fill="x", padx=22, pady=(2, 18))
 
-        # 파일 업로드 영역 (동적)
+        # 파일 업로드 영역 (동적) + Excel 정밀검증 - fin-review-toolkit 이식. PDF 업로드와 한 섹션으로
+        # 묶어, PDF만 올리거나(자동 PDF/XBRL 기반 검증) 여기서 Excel 정밀검증 파일까지 준비해두면
+        # (사람이 직접 검토·수정한 값) [▶ 리뷰 시작] 한 번으로 두 검증이 같은 탭(합계검증/연결 vs 별도)에
+        # 함께 표시된다.
         self.file_section_title = ctk.CTkLabel(s, text="⑥ 보고서 PDF 업로드", font=theme.FONT_SUBTITLE,
                                                 text_color=theme.TEXT_MAIN, anchor="w")
         self.file_section_title.pack(fill="x", padx=22, pady=(0, 6))
-        self.file_section = ctk.CTkFrame(s, fg_color="transparent")
-        self.file_section.pack(fill="x", padx=22, pady=(0, 18))
+
+        upload_card = ctk.CTkFrame(s, fg_color=theme.BG_CARD, corner_radius=10,
+                                    border_width=1, border_color=theme.BORDER_SOFT)
+        upload_card.pack(fill="x", padx=22, pady=(0, 4))
+
+        self.file_section = ctk.CTkFrame(upload_card, fg_color="transparent")
+        self.file_section.pack(fill="x", padx=10, pady=(10, 4))
+
+        ctk.CTkCheckBox(upload_card, text="Excel 정밀검증 (선택)", variable=self.excel_verify_var,
+                         font=theme.FONT_SMALL, text_color=theme.TEXT_SUB,
+                         fg_color=theme.ACCENT_PRIMARY, hover_color=theme.ACCENT_PRIMARY_HOVER,
+                         checkmark_color=theme.TEXT_ON_ACCENT, corner_radius=6,
+                         checkbox_width=16, checkbox_height=16).pack(anchor="w", padx=10, pady=(4, 2))
+        self.excel_status_label = ctk.CTkLabel(upload_card, text="미체크시, 정밀검증 생략",
+                                                font=theme.FONT_SMALL, text_color=theme.TEXT_SUB, anchor="w",
+                                                wraplength=250, justify="left")
+        self.excel_status_label.pack(fill="x", padx=10, pady=(0, 4))
+
+        excel_btn_row1 = ctk.CTkFrame(upload_card, fg_color="transparent")
+        excel_btn_row1.pack(fill="x", pady=(0, 10))
+        excel_btn_font = ctk.CTkFont(family=theme.FONT_FAMILY, size=11)
+        ctk.CTkFrame(excel_btn_row1, fg_color="transparent", width=1, height=1).pack(side="left", expand=True)
+        ctk.CTkButton(excel_btn_row1, text="PDF 그대로\n이용하기", width=110, height=42, corner_radius=8,
+                      font=excel_btn_font,
+                      fg_color=theme.ACCENT_SKY, hover_color=theme.ACCENT_SKY_DARK,
+                      text_color=theme.TEXT_MAIN, command=self._on_generate_excel_draft).pack(side="left")
+        ctk.CTkFrame(excel_btn_row1, fg_color="transparent", width=1, height=1).pack(side="left", expand=True)
+        ctk.CTkButton(excel_btn_row1, text="보고서엑셀파일\n업로드하기", width=120, height=42, corner_radius=8,
+                      font=excel_btn_font,
+                      fg_color=theme.ACCENT_SKY, hover_color=theme.ACCENT_SKY_DARK,
+                      text_color=theme.TEXT_MAIN, command=self._on_upload_excel_file).pack(side="left")
+        ctk.CTkFrame(excel_btn_row1, fg_color="transparent", width=1, height=1).pack(side="left", expand=True)
+        ctk.CTkLabel(
+            s, text="[PDF 그대로 이용하기]를 누르면(위 ⑥에서 이미 올린 PDF 재사용) 자동 추출한 "
+                    "초안이 다운로드 폴더에 '..._초안.xlsx'로 바로 저장됩니다. 열어서 원문과 "
+                    "대조·수정한 뒤 [▶ 리뷰 시작]을 누르면 그 Excel 내용을 매번 새로 읽어 "
+                    "합계검증/대사검증/연결-별도비교에 반영합니다. 이미 검토·수정이 끝난 파일이 "
+                    "있으면 [보고서엑셀파일 업로드하기]로 바로 선택하십시오.",
+            font=theme.FONT_SMALL, text_color=theme.TEXT_SUB, anchor="w", justify="left",
+            wraplength=268,
+        ).pack(fill="x", padx=22, pady=(2, 18))
 
         # 옵션7: XBRL 데이터 (선택 - 증감분석 정밀도 향상)
-        ctk.CTkLabel(s, text="⑦ XBRL 데이터 (선택, 증감분석 정밀화)", font=theme.FONT_SUBTITLE,
+        ctk.CTkLabel(s, text="⑦ XBRL활용 증감분석", font=theme.FONT_SUBTITLE,
                      text_color=theme.TEXT_MAIN, anchor="w").pack(fill="x", padx=22, pady=(0, 4))
         xbrl_frame = ctk.CTkFrame(s, fg_color=theme.BG_CARD, corner_radius=10,
                                    border_width=1, border_color=theme.BORDER_SOFT)
         xbrl_frame.pack(fill="x", padx=22, pady=(0, 4))
-        self.xbrl_path_label = ctk.CTkLabel(xbrl_frame, text="선택 안 함 (미선택 시 PDF 표 휴리스틱 사용)",
+        ctk.CTkCheckBox(xbrl_frame, text="XBRL활용 증감분석 (선택)", variable=self.xbrl_verify_var,
+                         font=theme.FONT_SMALL, text_color=theme.TEXT_SUB,
+                         fg_color=theme.ACCENT_PRIMARY, hover_color=theme.ACCENT_PRIMARY_HOVER,
+                         checkmark_color=theme.TEXT_ON_ACCENT, corner_radius=6,
+                         checkbox_width=16, checkbox_height=16).pack(anchor="w", padx=10, pady=(8, 2))
+        self.xbrl_path_label = ctk.CTkLabel(xbrl_frame, text="미체크시, XBRL활용 증감분석 생략",
                                              font=theme.FONT_SMALL, text_color=theme.TEXT_SUB, anchor="w",
                                              wraplength=230, justify="left")
-        self.xbrl_path_label.pack(fill="x", padx=10, pady=(8, 4))
+        self.xbrl_path_label.pack(fill="x", padx=10, pady=(0, 4))
         xbrl_btn_row = ctk.CTkFrame(xbrl_frame, fg_color="transparent")
         xbrl_btn_row.pack(fill="x", padx=10, pady=(0, 8))
-        ctk.CTkButton(xbrl_btn_row, text="ZIP 선택", width=80, corner_radius=8,
+        xbrl_btn_font = ctk.CTkFont(family=theme.FONT_FAMILY, size=10)
+        ctk.CTkButton(xbrl_btn_row, text="ZIP파일 업로드", width=110, corner_radius=8,
+                      font=xbrl_btn_font,
                       fg_color=theme.ACCENT_SKY, hover_color=theme.ACCENT_SKY_DARK,
                       text_color=theme.TEXT_MAIN, command=self._browse_xbrl_zip).pack(side="left")
-        ctk.CTkButton(xbrl_btn_row, text="폴더 선택", width=80, corner_radius=8,
+        ctk.CTkButton(xbrl_btn_row, text="XBRL파일 폴더 선택", width=130, corner_radius=8,
+                      font=xbrl_btn_font,
                       fg_color=theme.ACCENT_SKY, hover_color=theme.ACCENT_SKY_DARK,
                       text_color=theme.TEXT_MAIN, command=self._browse_xbrl_folder).pack(side="left", padx=(6, 0))
-        ctk.CTkButton(xbrl_btn_row, text="지우기", width=60, corner_radius=8,
-                      fg_color=theme.BG_SIDEBAR, hover_color=theme.BORDER_SOFT,
-                      text_color=theme.TEXT_MAIN, command=self._clear_xbrl).pack(side="left", padx=(6, 0))
         ctk.CTkLabel(
-            s, text="DART 원문XBRL(zip 또는 압축 해제한 폴더)을\n"
-                    "넣으면\n"
-                    "재무상태표/손익계산서/자본변동표/현금흐름표\n"
-                    "증감분석을 PDF 표 인식 대신\n"
-                    "XBRL 원본 수치로 정확하게 산출합니다.\n"
-                    "연결·별도 값이 같은 XBRL 안에 모두\n"
-                    "있으므로 1개만 올리면 됩니다.",
+            s, text="DART 원문 XBRL(ZIP 파일 또는 압축 해제한 폴더)을 업로드하면 재무상태표·"
+                    "손익계산서·자본변동표·현금흐름표 증감분석을 PDF 활용 시보다 더 정확하게 "
+                    "산출합니다. 연결·별도 값이 하나의 XBRL 안에 모두 있으므로 ZIP 파일 1개 "
+                    "업로드 또는 폴더 1개 지정만 하면 됩니다.",
             font=theme.FONT_SMALL, text_color=theme.TEXT_SUB, anchor="w", justify="left",
             wraplength=268,
         ).pack(fill="x", padx=22, pady=(2, 18))
 
-        # 옵션8: Excel 정밀검증 (선택) - fin-review-toolkit 이식. 사람이 직접 검토·수정한
-        # Excel 값을 기준으로 합계검증/대사검증/연결-별도비교를 수행해, 위 ⑥ PDF/⑦ XBRL 기반
-        # 자동 검증 결과와 같은 탭(합계검증/연결 vs 별도)에 함께 표시된다. ⑥에서 이미 올린
-        # PDF를 그대로 재사용하므로 여기서 PDF를 다시 올릴 필요가 없다.
-        ctk.CTkLabel(s, text="⑧ Excel 정밀검증 (선택)", font=theme.FONT_SUBTITLE,
+        # 옵션8: AI 심층 리뷰 (선택 - 규칙기반 검증과 별개, 사람처럼 PDF를 읽고 실질적
+        # 회계 판단까지 수행. 외부 API 호출이 필요하며 ⑥에서 올린 PDF를 그대로 전송한다.
+        ctk.CTkLabel(s, text="⑧ AI 심층 리뷰 (선택, 외부 API 필요)", font=theme.FONT_SUBTITLE,
                      text_color=theme.TEXT_MAIN, anchor="w").pack(fill="x", padx=22, pady=(0, 4))
-        excel_frame = ctk.CTkFrame(s, fg_color=theme.BG_CARD, corner_radius=10,
-                                    border_width=1, border_color=theme.BORDER_SOFT)
-        excel_frame.pack(fill="x", padx=22, pady=(0, 4))
-
-        name_row = ctk.CTkFrame(excel_frame, fg_color="transparent")
-        name_row.pack(fill="x", padx=10, pady=(8, 4))
-        ctk.CTkLabel(name_row, text="회사명", font=theme.FONT_SMALL, text_color=theme.TEXT_SUB).pack(side="left")
-        ctk.CTkEntry(name_row, textvariable=self.company_var, width=90,
-                     placeholder_text="예: OO전자").pack(side="left", padx=(4, 10))
-        ctk.CTkLabel(name_row, text="기준년월", font=theme.FONT_SMALL, text_color=theme.TEXT_SUB).pack(side="left")
-        ctk.CTkEntry(name_row, textvariable=self.period_var, width=60,
-                     placeholder_text="2612").pack(side="left", padx=(4, 0))
-
-        self.excel_status_label = ctk.CTkLabel(excel_frame, text="선택 안 함 (미선택 시 Excel 정밀검증 생략)",
-                                                font=theme.FONT_SMALL, text_color=theme.TEXT_SUB, anchor="w",
-                                                wraplength=230, justify="left")
-        self.excel_status_label.pack(fill="x", padx=10, pady=(0, 4))
-
-        excel_btn_row1 = ctk.CTkFrame(excel_frame, fg_color="transparent")
-        excel_btn_row1.pack(fill="x", padx=10, pady=(0, 4))
-        ctk.CTkButton(excel_btn_row1, text="PDF로 초안 생성", width=104, corner_radius=8,
+        ai_frame = ctk.CTkFrame(s, fg_color=theme.BG_CARD, corner_radius=10,
+                                 border_width=1, border_color=theme.BORDER_SOFT)
+        ai_frame.pack(fill="x", padx=22, pady=(0, 4))
+        self.ai_status_label = ctk.CTkLabel(
+            ai_frame, text="⑥에서 올린 PDF를 그대로 API로 전송해 실질적 회계 판단까지 포함한 "
+                           "서술형 리뷰를 받습니다.",
+            font=theme.FONT_SMALL, text_color=theme.TEXT_SUB, anchor="w",
+            wraplength=250, justify="left")
+        self.ai_status_label.pack(fill="x", padx=10, pady=(8, 4))
+        ai_btn_font = ctk.CTkFont(family=theme.FONT_FAMILY, size=11)
+        ctk.CTkButton(ai_frame, text="Claude API 검증\n(유료, 보안위험 낮음)", height=42, corner_radius=8,
+                      font=ai_btn_font,
                       fg_color=theme.ACCENT_SKY, hover_color=theme.ACCENT_SKY_DARK,
-                      text_color=theme.TEXT_MAIN, command=self._on_generate_excel_draft).pack(side="left")
-        ctk.CTkButton(excel_btn_row1, text="빈 템플릿", width=70, corner_radius=8,
-                      fg_color=theme.ACCENT_SKY, hover_color=theme.ACCENT_SKY_DARK,
-                      text_color=theme.TEXT_MAIN, command=self._on_create_excel_template).pack(side="left", padx=(6, 0))
-        excel_btn_row2 = ctk.CTkFrame(excel_frame, fg_color="transparent")
-        excel_btn_row2.pack(fill="x", padx=10, pady=(0, 8))
-        ctk.CTkButton(excel_btn_row2, text="검토 완료한 파일 선택", width=140, corner_radius=8,
-                      fg_color=theme.BG_SIDEBAR, hover_color=theme.BORDER_SOFT,
-                      text_color=theme.TEXT_MAIN, command=self._on_browse_excel_file).pack(side="left")
-        ctk.CTkButton(excel_btn_row2, text="지우기", width=60, corner_radius=8,
-                      fg_color=theme.BG_SIDEBAR, hover_color=theme.BORDER_SOFT,
-                      text_color=theme.TEXT_MAIN, command=self._clear_excel_review).pack(side="left", padx=(6, 0))
+                      text_color=theme.TEXT_MAIN, command=self._on_run_claude_review).pack(
+            fill="x", padx=10, pady=(0, 4))
+        ctk.CTkButton(ai_frame, text="Gemini API 검증\n(무료, 보안위험 높음)", height=42, corner_radius=8,
+                      font=ai_btn_font,
+                      fg_color=theme.ACCENT_PEACH, hover_color=theme.ACCENT_PEACH_DARK,
+                      text_color=theme.TEXT_MAIN, command=self._on_run_gemini_review).pack(
+            fill="x", padx=10, pady=(0, 10))
         ctk.CTkLabel(
-            s, text="PDF로 초안을 만들면(위 ⑥에서 이미 올린 PDF 재사용) 저장 후 열어서\n"
-                    "원문과 대조·수정해야 합니다. 수정을 마친 뒤(또는 이미 검토가\n"
-                    "끝난 파일이 있으면) [▶ 리뷰 시작]을 누르면 그 Excel 내용을 매번\n"
-                    "새로 읽어 합계검증/대사검증/연결-별도비교에 반영합니다. 회사명·\n"
-                    "기준년월을 입력해 두면 완료 시 '회사명기준년월.xlsx'로 다운로드\n"
-                    "폴더에 검증 결과가 자동 저장됩니다(차이만 모은 하이퍼링크 시트 포함).",
+            s, text="회사 기밀 재무자료가 외부 API로 전송됩니다. Gemini 무료 티어는 데이터가 "
+                    "모델 학습에 사용될 수 있어 보안위험이 있습니다. API 키는 프로그램 폴더의 "
+                    "secrets.json에서 관리하며 소스코드에는 포함되지 않습니다. 결과는 'AI "
+                    "심층분석' 탭에 표시되고, 리뷰 자동저장 파일에도 함께 저장됩니다.",
             font=theme.FONT_SMALL, text_color=theme.TEXT_SUB, anchor="w", justify="left",
             wraplength=268,
         ).pack(fill="x", padx=22, pady=(2, 18))
@@ -301,9 +339,25 @@ class App(ctk.CTk):
                                           anchor="w", wraplength=252, justify="left")
         self.status_label.pack(fill="x", padx=22, pady=(0, 4))
 
-        disclaimer = ("본 프로그램은 규칙·키워드 기반 1차 스크리닝 도구입니다.\n"
-                      "합산검증, 문단46 필수기재사항, 회계처리변경 키워드, 증감분석 등을\n"
-                      "자동 점검하되, 실질적 회계 판단·최종 검토의견은\n반드시 검토자가 직접 수행하십시오.")
+        # 리뷰 완료 후에만 표시되는 "다른 파일 리뷰" 확인 카드 (평소에는 pack 안 되어 숨김 상태)
+        self.next_review_frame = ctk.CTkFrame(s, fg_color=theme.BG_CARD, corner_radius=10,
+                                               border_width=1, border_color=theme.BORDER_SOFT)
+        ctk.CTkLabel(self.next_review_frame, text="다른 파일을 리뷰하시겠습니까?", font=theme.FONT_SUBTITLE,
+                     text_color=theme.TEXT_MAIN, anchor="w").pack(fill="x", padx=12, pady=(10, 6))
+        next_review_btn_row = ctk.CTkFrame(self.next_review_frame, fg_color="transparent")
+        next_review_btn_row.pack(fill="x", padx=12, pady=(0, 10))
+        ctk.CTkButton(next_review_btn_row, text="예", corner_radius=8,
+                      fg_color=theme.ACCENT_MINT, hover_color=theme.ACCENT_MINT_DARK,
+                      text_color=theme.TEXT_MAIN, command=self._on_next_review_yes).pack(
+            side="left", expand=True, fill="x", padx=(0, 4))
+        ctk.CTkButton(next_review_btn_row, text="아니오", corner_radius=8,
+                      fg_color=theme.ACCENT_CORAL, hover_color=theme.ACCENT_CORAL_DARK,
+                      text_color=theme.TEXT_MAIN, command=self._on_next_review_no).pack(
+            side="left", expand=True, fill="x", padx=(4, 0))
+
+        disclaimer = ("본 프로그램은 규칙·키워드 기반 1차 스크리닝 도구입니다. 합산검증, 문단46 "
+                      "필수기재사항, 회계처리변경 키워드, 증감분석 등을 자동 점검하되, 실질적 "
+                      "회계 판단·최종 검토의견은 반드시 검토자가 직접 수행하십시오.")
         ctk.CTkLabel(s, text=disclaimer, font=theme.FONT_SMALL, text_color=theme.TEXT_SUB,
                      anchor="w", justify="left", wraplength=252).pack(fill="x", padx=22, pady=(20, 16))
 
@@ -318,42 +372,46 @@ class App(ctk.CTk):
         header.pack(fill="x", padx=28, pady=(24, 8))
         ctk.CTkLabel(header, text="리뷰 결과", font=theme.FONT_TITLE, text_color=theme.TEXT_MAIN,
                      anchor="w").pack(side="left")
-        self.export_txt_btn = ctk.CTkButton(header, text="TXT로 저장", width=110, corner_radius=10,
-                                             fg_color=theme.ACCENT_MINT, hover_color=theme.ACCENT_MINT_DARK,
-                                             text_color=theme.TEXT_MAIN, state="disabled",
-                                             command=self._export_txt)
-        self.export_txt_btn.pack(side="right", padx=(6, 0))
-        self.export_docx_btn = ctk.CTkButton(header, text="DOCX로 저장", width=120, corner_radius=10,
-                                              fg_color=theme.ACCENT_PEACH, hover_color=theme.ACCENT_PEACH_DARK,
-                                              text_color=theme.TEXT_MAIN, state="disabled",
-                                              command=self._export_docx)
-        self.export_docx_btn.pack(side="right", padx=(6, 0))
-        self.export_xlsx_btn = ctk.CTkButton(header, text="증감분석 Excel", width=130, corner_radius=10,
+        self.export_xlsx_btn = ctk.CTkButton(header, text="Excel로 저장", width=130, corner_radius=10,
                                               fg_color=theme.ACCENT_SKY, hover_color=theme.ACCENT_SKY_DARK,
                                               text_color=theme.TEXT_MAIN, state="disabled",
                                               command=self._export_excel)
         self.export_xlsx_btn.pack(side="right", padx=(6, 0))
 
-        self.tabview = ctk.CTkTabview(
-            self.main_area, fg_color=theme.BG_MAIN,
-            segmented_button_fg_color=theme.BG_SIDEBAR, segmented_button_selected_color=theme.ACCENT_PRIMARY,
-            segmented_button_selected_hover_color=theme.ACCENT_PRIMARY_HOVER,
-            segmented_button_unselected_color=theme.BG_SIDEBAR, text_color=theme.TEXT_MAIN,
-            corner_radius=14,
-        )
-        self.tabview.pack(fill="both", expand=True, padx=24, pady=(0, 20))
-
         self.tab_names = ["요약", "체크리스트", "숫자 스크리닝", "증감분석", "합계검증", "공시사항점검",
                           "회계처리 변경", "참조자료", "연결 vs 별도"]
-        for name in self.tab_names:
-            self.tabview.add(name)
+
+        self.tab_bar = rh.WrappingTabBar(self.main_area, self.tab_names + ["AI 심층분석"],
+                                          on_select=self._show_tab)
+        self.tab_bar.pack(fill="x", padx=24, pady=(0, 8))
+
+        tab_content = ctk.CTkFrame(self.main_area, fg_color=theme.BG_MAIN, corner_radius=14)
+        tab_content.pack(fill="both", expand=True, padx=24, pady=(0, 20))
 
         self.scroll_frames = {}
+        self.tab_pages = {}
         for name in self.tab_names:
-            frame = ctk.CTkScrollableFrame(self.tabview.tab(name), fg_color="transparent")
-            frame.pack(fill="both", expand=True)
+            frame = ctk.CTkScrollableFrame(tab_content, fg_color="transparent")
+            frame.place(relx=0, rely=0, relwidth=1, relheight=1)
             self.scroll_frames[name] = frame
+            self.tab_pages[name] = frame
             rh.empty_note(frame, "리뷰를 시작하면 결과가 여기에 표시됩니다.")
+
+        # AI 심층분석 탭 - 서술형 텍스트 전용이라 위젯을 많이 만드는 대신 텍스트박스 하나만 사용
+        self.ai_review_textbox = ctk.CTkTextbox(
+            tab_content, fg_color=theme.BG_CARD, text_color=theme.TEXT_MAIN,
+            font=theme.FONT_BODY, wrap="word",
+        )
+        self.ai_review_textbox.place(relx=0, rely=0, relwidth=1, relheight=1)
+        self.ai_review_textbox.insert("1.0", "⑧에서 Claude API 또는 Gemini API 검증을 실행하면 "
+                                              "결과가 여기에 표시됩니다.")
+        self.ai_review_textbox.configure(state="disabled")
+        self.tab_pages["AI 심층분석"] = self.ai_review_textbox
+
+        self._show_tab(self.tab_names[0])
+
+    def _show_tab(self, name):
+        self.tab_pages[name].tkraise()
 
     # ------------------------------------------------------------ 파일업로드
     def _rebuild_file_section(self):
@@ -372,14 +430,13 @@ class App(ctk.CTk):
             self._file_row(self.file_section, label, "main")
 
     def _file_row(self, parent, label, key):
-        frame = ctk.CTkFrame(parent, fg_color=theme.BG_CARD, corner_radius=10,
-                              border_width=1, border_color=theme.BORDER_SOFT)
-        frame.pack(fill="x", pady=5)
+        frame = ctk.CTkFrame(parent, fg_color="transparent")
+        frame.pack(fill="x", pady=(0, 8))
         ctk.CTkLabel(frame, text=label, font=theme.FONT_SMALL, text_color=theme.TEXT_MAIN,
-                     anchor="w").pack(fill="x", padx=12, pady=(8, 2))
+                     anchor="w").pack(fill="x", pady=(0, 2))
         path_label = ctk.CTkLabel(frame, text="선택된 파일 없음", font=theme.FONT_SMALL,
                                    text_color=theme.TEXT_SUB, anchor="w")
-        path_label.pack(fill="x", padx=12, pady=(0, 6))
+        path_label.pack(fill="x", pady=(0, 4))
 
         def browse():
             path = fd.askopenfilename(title=label, filetypes=[("PDF 파일", "*.pdf")])
@@ -390,7 +447,7 @@ class App(ctk.CTk):
 
         ctk.CTkButton(frame, text="파일 선택", corner_radius=8, height=30, fg_color=theme.ACCENT_SKY,
                       hover_color=theme.ACCENT_SKY_DARK, text_color=theme.TEXT_MAIN,
-                      command=browse).pack(padx=12, pady=(0, 10), anchor="w")
+                      command=browse).pack(anchor="w")
 
     # -------------------------------------------------------------- XBRL
     def _browse_xbrl_zip(self):
@@ -408,11 +465,6 @@ class App(ctk.CTk):
         self.xbrl_path_label.configure(text=f"폴더: {os.path.basename(path) or path}",
                                         text_color=theme.ACCENT_MINT_DARK)
 
-    def _clear_xbrl(self):
-        self.xbrl_source_path = None
-        self.xbrl_path_label.configure(text="선택 안 함 (미선택 시 PDF 표 휴리스틱 사용)",
-                                        text_color=theme.TEXT_SUB)
-
     # ------------------------------------------------------------- Excel 정밀검증
     def _excel_default_basename(self) -> str:
         company = self.company_var.get().strip()
@@ -428,7 +480,7 @@ class App(ctk.CTk):
             self.excel_status_label.configure(text=f"파일: {os.path.basename(self.excel_review_path)}",
                                                text_color=theme.ACCENT_MINT_DARK)
         else:
-            self.excel_status_label.configure(text="선택 안 함 (미선택 시 Excel 정밀검증 생략)",
+            self.excel_status_label.configure(text="미체크시, 정밀검증 생략",
                                                text_color=theme.TEXT_SUB)
 
     def _on_generate_excel_draft(self):
@@ -447,19 +499,15 @@ class App(ctk.CTk):
             mb.showerror("안내", "PDF 자동 채움 기능을 사용하려면 pdfplumber 패키지가 필요합니다.")
             return
         try:
-            wb, counts = xlengine.build_workbook_from_pdfs(sep_path, con_path)
+            wb, _counts = xlengine.build_workbook_from_pdfs(sep_path, con_path)
         except Exception as e:  # noqa: BLE001
             mb.showerror("오류", f"PDF 자동 추출 중 오류가 발생했습니다:\n{e}")
             return
 
-        save_path = fd.asksaveasfilename(
-            title="자동 추출된 검토용 Excel 저장 (저장 후 열어서 원문과 대조·수정하십시오)",
-            defaultextension=".xlsx", initialfile=self._excel_default_basename() + ".xlsx",
-            filetypes=[("Excel 파일", "*.xlsx")],
-        )
-        if not save_path:
-            return
+        downloads = os.path.join(os.path.expanduser("~"), "Downloads")
         try:
+            os.makedirs(downloads, exist_ok=True)
+            save_path = os.path.join(downloads, self._excel_default_basename() + "_초안.xlsx")
             wb.save(save_path)
         except Exception as e:  # noqa: BLE001
             mb.showerror("오류", f"저장 실패:\n{e}")
@@ -467,39 +515,8 @@ class App(ctk.CTk):
 
         self.excel_review_path = save_path
         self._refresh_excel_status()
-        summary = "\n".join(f"  - {k}: {v}건" for k, v in counts.items()) or "  (추출된 항목 없음)"
-        mb.showwarning(
-            "PDF 자동 추출 완료 - 검토 필수",
-            "재무상태표·손익계산서·현금흐름표 본문을 PDF에서 자동으로 읽어 Excel에 채웠습니다.\n\n"
-            f"{summary}\n\n"
-            "⚠️ 자동 추출은 참고용입니다. [▶ 리뷰 시작] 전에 저장된 파일을 열어 반드시 확인하세요:\n"
-            "  · 계정과목명/금액이 실제 PDF와 일치하는지 (각 행 '비고'에 원문 줄을 함께 넣어두었습니다)\n"
-            "  · 구분(세부/소계/합계) 분류가 올바른지\n"
-            "  · 자본변동표(SOCE)와 주석은 자동 추출되지 않으므로 직접 입력해야 합니다\n\n"
-            f"저장 위치: {save_path}\n\n"
-            "수정을 마쳤으면 [▶ 리뷰 시작]을 누르세요 - 저장한 파일을 다시 여는 절차 없이 "
-            "그대로 최신 내용을 읽어 검증합니다.",
-        )
 
-    def _on_create_excel_template(self):
-        from .rules import excel_review_engine as xlengine
-        path = fd.asksaveasfilename(
-            title="템플릿 저장 위치", defaultextension=".xlsx",
-            initialfile=self._excel_default_basename() + "_template.xlsx", filetypes=[("Excel 파일", "*.xlsx")],
-        )
-        if not path:
-            return
-        try:
-            xlengine.create_template(path)
-        except Exception as e:  # noqa: BLE001
-            mb.showerror("오류", f"템플릿 생성 실패:\n{e}")
-            return
-        self.excel_review_path = path
-        self._refresh_excel_status()
-        mb.showinfo("완료", f"템플릿을 생성했습니다:\n{path}\n\n"
-                            "Excel에서 열어 재무제표 숫자를 채운 뒤 [▶ 리뷰 시작]을 누르세요.")
-
-    def _on_browse_excel_file(self):
+    def _on_upload_excel_file(self):
         path = fd.askopenfilename(title="검토 완료한 Excel 정밀검증 파일 선택",
                                    filetypes=[("Excel 파일", "*.xlsx;*.xlsm")])
         if not path:
@@ -507,9 +524,68 @@ class App(ctk.CTk):
         self.excel_review_path = path
         self._refresh_excel_status()
 
-    def _clear_excel_review(self):
-        self.excel_review_path = None
-        self._refresh_excel_status()
+    # -------------------------------------------------------------- AI 심층 리뷰
+    def _on_run_claude_review(self):
+        self._run_ai_review("Claude", ai_review.run_claude_review)
+
+    def _on_run_gemini_review(self):
+        self._run_ai_review("Gemini", ai_review.run_gemini_review)
+
+    def _run_ai_review(self, label, review_func):
+        if self.fs_type.get() == "연결 vs 별도":
+            if not self.consol_pdf_path or not self.separate_pdf_path:
+                mb.showwarning("파일 필요", "먼저 사이드바 ⑥에서 연결·별도 PDF를 모두 선택해 주세요.")
+                return
+            pdf_paths = [self.consol_pdf_path, self.separate_pdf_path]
+        else:
+            if not self.main_pdf_path:
+                mb.showwarning("파일 필요", "먼저 사이드바 ⑥에서 검토보고서 PDF를 선택해 주세요.")
+                return
+            pdf_paths = [self.main_pdf_path]
+
+        self.ai_status_label.configure(text=f"{label} API 호출 중... (문서 분량에 따라 수 분 소요될 수 있습니다)",
+                                        text_color=theme.TEXT_SUB)
+
+        def worker():
+            try:
+                text = review_func(pdf_paths)
+            except Exception as e:  # noqa: BLE001
+                self.after(0, lambda: self._on_ai_review_error(label, e))
+                return
+            self.after(0, lambda: self._on_ai_review_done(label, text))
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _on_ai_review_error(self, label, err: Exception):
+        self.ai_status_label.configure(
+            text="⑥에서 올린 PDF를 그대로 API로 전송해 실질적 회계 판단까지 포함한 서술형 "
+                 "리뷰를 받습니다.",
+            text_color=theme.TEXT_SUB)
+        quota_msg = ai_review.classify_quota_error(err)
+        if quota_msg:
+            mb.showwarning(f"{label} API 사용량 한도 초과", quota_msg)
+        else:
+            mb.showerror(f"{label} API 오류", f"{label} 리뷰 중 오류가 발생했습니다.\n\n{err}")
+
+    def _on_ai_review_done(self, label, text: str):
+        self.ai_status_label.configure(text=f"{label} 리뷰 완료 (AI 심층분석 탭 확인)",
+                                        text_color=theme.ACCENT_MINT_DARK)
+        self.last_ai_reviews[label] = text
+
+        self.ai_review_textbox.configure(state="normal")
+        self.ai_review_textbox.delete("1.0", "end")
+        self.ai_review_textbox.insert("1.0", f"[{label} API 심층 리뷰]\n\n{text}")
+        self.ai_review_textbox.configure(state="disabled")
+        self.tab_bar.select("AI 심층분석")
+
+        if self.last_result is not None:
+            auto_path = self._auto_save_full_excel(self.last_result)
+            if auto_path:
+                mb.showinfo(f"{label} 리뷰 완료", f"AI 심층분석 결과를 반영해 다시 저장했습니다:\n{auto_path}")
+        else:
+            mb.showinfo(f"{label} 리뷰 완료",
+                        "AI 심층분석 탭에서 결과를 확인하세요.\n"
+                        "이후 [▶ 리뷰 시작]을 실행하면 이 결과도 함께 자동저장됩니다.")
 
     # ------------------------------------------------------------------ 설정
     def _open_settings(self):
@@ -526,6 +602,8 @@ class App(ctk.CTk):
         accounting_standard = self.accounting_standard.get()
         pm_consol = _parse_pm(self.pm_consol_var.get())
         pm_separate = _parse_pm(self.pm_separate_var.get())
+        excel_path = self.excel_review_path if self.excel_verify_var.get() else None
+        xbrl_source = self.xbrl_source_path if self.xbrl_verify_var.get() else None
 
         doc_word = "검토보고서" if report_type == "분반기" else "감사보고서"
         if fs_type == "연결 vs 별도":
@@ -542,8 +620,6 @@ class App(ctk.CTk):
         self.settings["last_report_type"] = report_type
         self.settings["last_fs_type"] = fs_type
         self.settings["last_accounting_standard"] = accounting_standard
-        self.settings["last_pm_consol"] = self.pm_consol_var.get().strip()
-        self.settings["last_pm_separate"] = self.pm_separate_var.get().strip()
         settings.save_settings(self.settings)
 
         self.progress.pack(fill="x", padx=22, pady=(0, 6))
@@ -556,7 +632,7 @@ class App(ctk.CTk):
             try:
                 result = run_review(report_type, fs_type, accounting_standard, files, self.settings,
                                      pm_consol=pm_consol, pm_separate=pm_separate,
-                                     xbrl_source=self.xbrl_source_path, excel_path=self.excel_review_path,
+                                     xbrl_source=xbrl_source, excel_path=excel_path,
                                      company_name=self.company_var.get(), period=self.period_var.get(),
                                      progress_cb=progress_cb)
             except Exception as e:  # noqa: BLE001
@@ -589,14 +665,78 @@ class App(ctk.CTk):
                                 text_color=theme.TEXT_ON_ACCENT)
         self.status_label.configure(text="완료되었습니다.")
         self.last_result = result
-        self.export_txt_btn.configure(state="normal")
-        self.export_docx_btn.configure(state="normal")
-        self.export_xlsx_btn.configure(state="normal" if not result.get("not_supported") else "disabled")
+        self.export_xlsx_btn.configure(state="normal")
         self._render_result(result)
-        if result.get("excel_report_path"):
-            mb.showinfo("Excel 정밀검증 결과 저장 완료",
-                        f"합계검증/대사검증/연결-별도비교 결과를 저장했습니다:\n{result['excel_report_path']}\n\n"
-                        "맨 왼쪽 '차이요약' 시트에서 하이퍼링크를 클릭하면 원본 Excel의 해당 셀로 이동합니다.")
+
+        auto_path = self._auto_save_full_excel(result)
+        if auto_path:
+            self.status_label.configure(text=f"완료 - 자동 저장됨: {auto_path}")
+            note = ("\n\n'차이요약' 시트의 하이퍼링크를 클릭하면 Excel 정밀검증 원본 파일의 "
+                    "해당 셀로 이동합니다." if result.get("excel_verify_data") else "")
+            mb.showinfo("자동 저장 완료", f"리뷰 결과를 저장했습니다:\n{auto_path}{note}")
+        else:
+            mb.showwarning("자동 저장 실패", "리뷰 결과 Excel 자동 저장에 실패했습니다.\n"
+                                          "우측 상단 'Excel로 저장' 버튼으로 수동 저장해 주세요.")
+
+        self.next_review_frame.pack(fill="x", padx=22, pady=(6, 10), after=self.status_label)
+
+    def _on_next_review_yes(self):
+        self.next_review_frame.pack_forget()
+
+        self.report_type.set(settings.DEFAULTS["last_report_type"])
+        self.fs_type.set(settings.DEFAULTS["last_fs_type"])
+        self.accounting_standard.set(settings.DEFAULTS["last_accounting_standard"])
+        self.pm_consol_var.set("")
+        self.pm_separate_var.set("")
+        self.company_var.set("")
+        self.period_var.set("")
+
+        self.main_pdf_path = None
+        self.consol_pdf_path = None
+        self.separate_pdf_path = None
+        self.xbrl_source_path = None
+        self.xbrl_verify_var.set(True)
+        self.excel_review_path = None
+        self.excel_verify_var.set(True)
+        self.last_result = None
+        self.last_ai_reviews = {}
+
+        self._rebuild_file_section()
+        self._refresh_excel_status()
+        self.xbrl_path_label.configure(text="미체크시, XBRL활용 증감분석 생략", text_color=theme.TEXT_SUB)
+        self.ai_status_label.configure(
+            text="⑥에서 올린 PDF를 그대로 API로 전송해 실질적 회계 판단까지 포함한 서술형 "
+                 "리뷰를 받습니다.",
+            text_color=theme.TEXT_SUB)
+        self.ai_review_textbox.configure(state="normal")
+        self.ai_review_textbox.delete("1.0", "end")
+        self.ai_review_textbox.insert("1.0", "⑧에서 Claude API 또는 Gemini API 검증을 실행하면 "
+                                              "결과가 여기에 표시됩니다.")
+        self.ai_review_textbox.configure(state="disabled")
+
+        for frame in self.scroll_frames.values():
+            rh.clear(frame)
+        self.export_xlsx_btn.configure(state="disabled")
+
+        self.run_btn.configure(state="normal", text="▶  리뷰 시작",
+                                fg_color=theme.ACCENT_PRIMARY, hover_color=theme.ACCENT_PRIMARY_HOVER,
+                                text_color=theme.TEXT_ON_ACCENT)
+        self.status_label.configure(text="")
+
+    def _on_next_review_no(self):
+        self.destroy()
+
+    def _auto_save_full_excel(self, result: dict) -> str | None:
+        if self.last_ai_reviews:
+            result["ai_reviews"] = self.last_ai_reviews
+        downloads = os.path.join(os.path.expanduser("~"), "Downloads")
+        try:
+            os.makedirs(downloads, exist_ok=True)
+            path = os.path.join(downloads, self._excel_default_basename() + ".xlsx")
+            export_full_excel(result, path)
+        except Exception:  # noqa: BLE001
+            return None
+        return path
 
     # -------------------------------------------------------------- 렌더링
     def _render_result(self, result: dict):
@@ -634,6 +774,7 @@ class App(ctk.CTk):
             self._render_summary_doc(summary, "별도", sections["separate"])
         else:
             self._render_summary_doc(summary, result["fs_type"], sections["single"])
+        self.update_idletasks()
 
         # 체크리스트 탭
         checklist_tab = self.scroll_frames["체크리스트"]
@@ -651,6 +792,7 @@ class App(ctk.CTk):
             rh.render_checklist(checklist_tab, data["checklist"])
             rh.render_opinion(checklist_tab, data["opinion"])
             rh.render_comparative(checklist_tab, data["comparative"])
+        self.update_idletasks()
 
         # 숫자 스크리닝 탭
         num_tab = self.scroll_frames["숫자 스크리닝"]
@@ -665,6 +807,7 @@ class App(ctk.CTk):
             data = sections["single"]
             rh.render_sum_check(num_tab, data["sum_check"])
             rh.render_cross_check(num_tab, data["cross_check"])
+        self.update_idletasks()
 
         # 증감분석 탭
         var_tab = self.scroll_frames["증감분석"]
@@ -681,23 +824,32 @@ class App(ctk.CTk):
             data = sections["single"]
             rh.render_variance_tables(var_tab, data["variance_tables"], data["detected_unit"], data["pm_threshold"],
                                        data.get("variance_source"))
+        self.update_idletasks()
 
         # 합계검증 탭 (재무제표 계층별 합계검증 + FS간 교차검증, XBRL·PDF 둘 다)
         calc_tab = self.scroll_frames["합계검증"]
         if is_dual:
             rh.doc_label_title(calc_tab, "연결재무제표")
             rh.render_calc_check(calc_tab, sections["consol"].get("calc_check", {}))
+            self.update_idletasks()
             rh.render_cross_check_fs(calc_tab, sections["consol"].get("cross_check_fs", {}))
+            self.update_idletasks()
             rh.render_note_check(calc_tab, sections["consol"].get("note_check", {}))
+            self.update_idletasks()
             rh.doc_label_title(calc_tab, "별도재무제표")
             rh.render_calc_check(calc_tab, sections["separate"].get("calc_check", {}))
+            self.update_idletasks()
             rh.render_cross_check_fs(calc_tab, sections["separate"].get("cross_check_fs", {}))
+            self.update_idletasks()
             rh.render_note_check(calc_tab, sections["separate"].get("note_check", {}))
         else:
             data = sections["single"]
             rh.render_calc_check(calc_tab, data.get("calc_check", {}))
+            self.update_idletasks()
             rh.render_cross_check_fs(calc_tab, data.get("cross_check_fs", {}))
+            self.update_idletasks()
             rh.render_note_check(calc_tab, data.get("note_check", {}))
+        self.update_idletasks()
 
         # 공시사항점검 탭 (감사조서서식 8400 공시사항점검표 대사)
         disc_tab = self.scroll_frames["공시사항점검"]
@@ -708,6 +860,7 @@ class App(ctk.CTk):
             rh.render_disclosure_check(disc_tab, sections["separate"].get("disclosure_check", {}))
         else:
             rh.render_disclosure_check(disc_tab, sections["single"].get("disclosure_check", {}))
+        self.update_idletasks()
 
         # 회계처리 변경 탭
         change_tab = self.scroll_frames["회계처리 변경"]
@@ -718,10 +871,12 @@ class App(ctk.CTk):
             rh.render_accounting_changes(change_tab, sections["separate"]["accounting_changes"])
         else:
             rh.render_accounting_changes(change_tab, sections["single"]["accounting_changes"])
+        self.update_idletasks()
 
         # 참조자료 탭
         ref_tab = self.scroll_frames["참조자료"]
         rh.render_reference(ref_tab, sections.get("reference_matches", {}), result.get("ref_sources", []))
+        self.update_idletasks()
 
         # 연결 vs 별도 탭
         cvs_tab = self.scroll_frames["연결 vs 별도"]
@@ -731,6 +886,7 @@ class App(ctk.CTk):
             rh.empty_note(cvs_tab, "키워드/실무체크리스트 비교는 옵션2에서 '연결 vs 별도'를 선택한 "
                                     "경우에만 표시됩니다.")
         rh.render_excel_compare(cvs_tab, result.get("excel_compare"))
+        self.update_idletasks()
 
     def _render_summary_doc(self, parent, label, data):
         rh.doc_label_title(parent, f"{label} 요약")
@@ -762,39 +918,17 @@ class App(ctk.CTk):
         rh.badge(row, f"총 {data['page_count']}p", theme.BG_SIDEBAR).pack(side="left", padx=4)
 
     # -------------------------------------------------------------- 내보내기
-    def _export_txt(self):
-        if not self.last_result:
-            return
-        path = fd.asksaveasfilename(defaultextension=".txt", filetypes=[("텍스트 파일", "*.txt")],
-                                     initialfile="사전리뷰결과.txt")
-        if not path:
-            return
-        export_txt(self.last_result, path)
-        mb.showinfo("저장 완료", f"저장되었습니다:\n{path}")
-
-    def _export_docx(self):
-        if not self.last_result:
-            return
-        path = fd.asksaveasfilename(defaultextension=".docx", filetypes=[("Word 문서", "*.docx")],
-                                     initialfile="사전리뷰결과.docx")
-        if not path:
-            return
-        try:
-            export_docx(self.last_result, path)
-        except Exception as e:  # noqa: BLE001
-            mb.showerror("저장 실패", f"DOCX 저장 중 오류가 발생했습니다.\n\n{e}")
-            return
-        mb.showinfo("저장 완료", f"저장되었습니다:\n{path}")
-
     def _export_excel(self):
-        if not self.last_result or self.last_result.get("not_supported"):
+        if not self.last_result:
             return
+        if self.last_ai_reviews:
+            self.last_result["ai_reviews"] = self.last_ai_reviews
         path = fd.asksaveasfilename(defaultextension=".xlsx", filetypes=[("Excel 통합 문서", "*.xlsx")],
-                                     initialfile="증감분석표.xlsx")
+                                     initialfile="사전리뷰결과.xlsx")
         if not path:
             return
         try:
-            export_variance_excel(self.last_result, path)
+            export_full_excel(self.last_result, path)
         except Exception as e:  # noqa: BLE001
             mb.showerror("저장 실패", f"Excel 저장 중 오류가 발생했습니다.\n\n{e}")
             return

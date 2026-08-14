@@ -197,12 +197,7 @@ def _render_variance(variance_tables: dict, unit: str | None, pm_threshold: floa
                 lines.append("     - 데이터 없음")
             continue
         for r in rows[:60]:
-            flags = []
-            if r.get("amount_flag"):
-                flags.append("금액차이기준초과")
-            if r.get("pct_flag"):
-                flags.append("증감률5%이상")
-            flag_txt = f" [{', '.join(flags)}]" if flags else ""
+            flag_txt = " [금액차이기준초과]" if r.get("amount_flag") else ""
             seg = f"({r['segment']}) " if r.get("segment") else ""
             pct_txt = f"{r['pct'] * 100:.1f}%" if r["pct"] is not None else "N/A"
             lines.append(f"     - {seg}{r['label']}: 당기 {r['current']:,.0f} / 전기 {r['prior']:,.0f} "
@@ -296,43 +291,3 @@ def render_text_report(result: dict) -> str:
         lines.append(_render_reference(sections.get("reference_matches", {}), result.get("ref_sources", [])))
 
     return "\n".join(lines)
-
-
-def export_txt(result: dict, path: str) -> None:
-    with open(path, "w", encoding="utf-8") as f:
-        f.write(render_text_report(result))
-
-
-def export_docx(result: dict, path: str) -> None:
-    from docx import Document
-    from docx.shared import Pt
-
-    doc = Document()
-    doc.add_heading("보고서 Review프로그램 - 사전리뷰 결과", level=1)
-    meta = doc.add_paragraph()
-    meta.add_run(f"보고서종류: {result['report_type']}    재무제표구분: {result['fs_type']}    "
-                 f"적용기준: {result['accounting_standard']}\n").bold = True
-    for src in result.get("ref_sources", []):
-        meta.add_run(f"참조자료 [{src['label']}]: {src['status']}\n")
-    disclaimer_p = doc.add_paragraph()
-    disclaimer_run = disclaimer_p.add_run(DISCLAIMER)
-    disclaimer_run.italic = True
-    disclaimer_run.font.size = Pt(9)
-
-    text = render_text_report(result)
-    started = False
-    for line in text.splitlines():
-        stripped = line.strip()
-        if not started:
-            # 상단 메타 정보 블록은 위에서 이미 작성했으므로 첫 구분선까지 건너뜀
-            if stripped.startswith("=" * 5):
-                started = True
-            continue
-        if stripped.startswith("[") and stripped.endswith("]"):
-            doc.add_heading(stripped.strip("[]"), level=2)
-        elif not stripped:
-            continue
-        else:
-            doc.add_paragraph(line)
-
-    doc.save(path)

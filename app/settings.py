@@ -45,8 +45,6 @@ DEFAULTS = {
     "last_report_type": "분반기",
     "last_fs_type": "연결",
     "last_accounting_standard": "KIFRS",
-    "last_pm_consol": "",
-    "last_pm_separate": "",
     "export_folder": "",
 }
 

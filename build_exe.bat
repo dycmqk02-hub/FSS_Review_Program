@@ -26,6 +26,16 @@ pyinstaller --noconfirm --onefile --windowed ^
     --collect-all xlrd ^
     --add-data "resources;resources" ^
     main.py
+if errorlevel 1 (
+    echo.
+    echo 빌드 실패 - 위 오류 메시지를 확인하세요.
+    pause
+    exit /b 1
+)
+
+REM secrets.json(API 키)은 dist 폴더를 통째로 지우고 다시 만들 때 함께 삭제되므로,
+REM 빌드 후 프로젝트 루트에 있는 secrets.json을 dist로 복사해 계속 유지되게 한다.
+if exist "secrets.json" copy /y "secrets.json" "dist\secrets.json" >nul
 
 echo.
 echo 빌드 완료: dist\FSS_ReviewProgram.exe

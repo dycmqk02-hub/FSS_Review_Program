@@ -1,4 +1,6 @@
 """결과 데이터를 CustomTkinter 카드/배지 위젯으로 렌더링하는 재사용 헬퍼."""
+import tkinter.font as tkfont
+
 import customtkinter as ctk
 
 from . import theme
@@ -7,6 +9,62 @@ from . import theme
 def clear(frame):
     for w in frame.winfo_children():
         w.destroy()
+
+
+class WrappingTabBar(ctk.CTkFrame):
+    """CTkTabview의 세그먼트 버튼은 창이 좁아지면 글자를 그냥 잘라버린다. 이 위젯은
+    버튼들을 place()로 직접 배치해, 폭이 부족하면 자동으로 다음 줄로 넘겨(줄바꿈)
+    항상 전체 글자가 보이게 한다."""
+
+    def __init__(self, master, tab_names, on_select, **kwargs):
+        super().__init__(master, fg_color="transparent", **kwargs)
+        self.tab_names = list(tab_names)
+        self._on_select_cb = on_select
+        self.active = self.tab_names[0]
+        self.buttons = {}
+        measure_font = tkfont.Font(family=theme.FONT_BODY[0], size=theme.FONT_BODY[1])
+        for name in self.tab_names:
+            btn_w = measure_font.measure(name) + 32
+            btn = ctk.CTkButton(
+                self, text=name, corner_radius=10, height=32, width=btn_w, font=theme.FONT_BODY,
+                command=lambda n=name: self.select(n),
+            )
+            self.buttons[name] = btn
+        self._last_width = 0
+        self.bind("<Configure>", lambda e: self._relayout(e.width))
+        self.select(self.tab_names[0], notify=False)
+
+    def select(self, name, notify=True):
+        self.active = name
+        for n, b in self.buttons.items():
+            selected = n == name
+            b.configure(
+                fg_color=theme.ACCENT_PRIMARY if selected else theme.BG_SIDEBAR,
+                text_color=theme.TEXT_ON_ACCENT if selected else theme.TEXT_MAIN,
+                hover_color=theme.ACCENT_PRIMARY_HOVER if selected else theme.BORDER_SOFT,
+            )
+        if notify:
+            self._on_select_cb(name)
+
+    def _relayout(self, width):
+        if width <= 1 or width == self._last_width:
+            return
+        self._last_width = width
+        self.update_idletasks()
+        x = y = 0
+        pad_x, pad_y = 6, 6
+        row_h = 0
+        for name in self.tab_names:
+            btn = self.buttons[name]
+            req_w, req_h = btn.winfo_reqwidth(), btn.winfo_reqheight()
+            if x + req_w > width and x > 0:
+                x = 0
+                y += row_h + pad_y
+                row_h = 0
+            btn.place(x=x, y=y)
+            x += req_w + pad_x
+            row_h = max(row_h, req_h)
+        self.configure(height=y + row_h)
 
 
 def badge(parent, text, bg, fg=None):
@@ -152,7 +210,7 @@ def _mismatch_table(container, mismatches):
     for c, h in enumerate(headers):
         ctk.CTkLabel(table, text=h, font=theme.FONT_SUBTITLE, text_color=theme.TEXT_MAIN,
                      anchor="w").grid(row=0, column=c, sticky="w", padx=8, pady=(8, 4))
-    for r, m in enumerate(mismatches[:60], start=1):
+    for r, m in enumerate(mismatches[:40], start=1):
         children_txt = ", ".join(m.get("children", [])[:6])
         values = [m.get("period") or "-", m["parent"], f"{m['stated']:,.0f}",
                   f"{m['computed']:,.0f}", f"{m['diff']:,.0f}", children_txt]
@@ -165,8 +223,8 @@ def _mismatch_table(container, mismatches):
     table.grid_columnconfigure(5, weight=3)
     for c in (0, 2, 3, 4):
         table.grid_columnconfigure(c, weight=1)
-    if len(mismatches) > 60:
-        empty_note(container, f"외 {len(mismatches) - 60}건 더 있습니다.")
+    if len(mismatches) > 40:
+        empty_note(container, f"외 {len(mismatches) - 40}건 더 있습니다.")
 
 
 def render_calc_check(container, calc_check):
@@ -237,7 +295,7 @@ def render_cross_check_fs(container, cross_check):
         if not findings:
             empty_note(container, "불일치 없음")
             continue
-        for f in findings:
+        for f in findings[:30]:
             section_title(container, f["item"])
             table = ctk.CTkFrame(container, fg_color=theme.BG_CARD, corner_radius=10,
                                   border_width=1, border_color=theme.BORDER_SOFT)
@@ -255,6 +313,8 @@ def render_cross_check_fs(container, cross_check):
             table.grid_columnconfigure(0, weight=2)
             table.grid_columnconfigure(1, weight=2)
             table.grid_columnconfigure(2, weight=1)
+        if len(findings) > 30:
+            empty_note(container, f"외 {len(findings) - 30}건 더 있습니다 (자동 저장된 Excel에서 전체 확인 가능).")
 
 
 def render_disclosure_check(container, disclosure_check):
@@ -289,7 +349,7 @@ def render_disclosure_check(container, disclosure_check):
 
     for sec, sec_items in by_section.items():
         section_title(container, f"{sec} - 미확인 {len(sec_items)}건")
-        for i in sec_items[:40]:
+        for i in sec_items[:25]:
             row = card(container)
             ctk.CTkLabel(row, text=f"[{i['reference']}]", font=theme.FONT_SMALL,
                          text_color=theme.ACCENT_PRIMARY_HOVER, anchor="w").pack(fill="x", padx=12, pady=(8, 0))
@@ -297,8 +357,8 @@ def render_disclosure_check(container, disclosure_check):
                          anchor="w", justify="left", wraplength=780).pack(fill="x", padx=12, pady=(2, 4))
             ctk.CTkLabel(row, text=f"검색 키워드: {', '.join(i['keywords'])}", font=theme.FONT_SMALL,
                          text_color=theme.TEXT_SUB, anchor="w").pack(fill="x", padx=12, pady=(0, 8))
-        if len(sec_items) > 40:
-            empty_note(container, f"외 {len(sec_items) - 40}건 더 있습니다.")
+        if len(sec_items) > 25:
+            empty_note(container, f"외 {len(sec_items) - 25}건 더 있습니다.")
 
 
 def render_note_check(container, note_check):
@@ -315,7 +375,7 @@ def render_note_check(container, note_check):
         empty_note(container, f"확인됨 {cr.get('confirmed', 0)}건 (재무제표 계정과 동일 요소가 주석에도 "
                                f"태깅됨) / 주석 미확인 {len(cr.get('unmatched', []))}건 "
                                f"(주석에 해당 요소가 태깅되지 않음 - 서술식 설명만 있을 수 있어 반드시 누락은 아님)")
-        for u in cr.get("unmatched", [])[:60]:
+        for u in cr.get("unmatched", [])[:30]:
             row = card(container)
             ctk.CTkLabel(row, text=f"[{u['stmt']}] {u['label']} ({u['element']}) = {u['value']:,.0f}",
                          font=theme.FONT_SMALL, text_color=theme.TEXT_MAIN, anchor="w", justify="left",
@@ -331,7 +391,7 @@ def render_note_check(container, note_check):
     at = pdf.get("amount_tracing") or {}
     empty_note(container, f"확인됨 {at.get('confirmed', 0)}건 (재무제표 금액이 참조 주석 본문에 실제로 등장) / "
                            f"주석 미확인 {len(at.get('unmatched', []))}건")
-    for u in at.get("unmatched", [])[:60]:
+    for u in at.get("unmatched", [])[:30]:
         row = card(container)
         ctk.CTkLabel(row, text=f"[{u['stmt']}] {u['label']} = {u['value']:,.0f}  (참조 주석: {', '.join(u['notes'])})",
                      font=theme.FONT_SMALL, text_color=theme.TEXT_MAIN, anchor="w", justify="left",
@@ -374,7 +434,7 @@ def render_reference(container, ref_matches, ref_sources):
         if not hits:
             continue
         section_title(container, f"키워드: {kw}")
-        for h in hits:
+        for h in hits[:30]:
             row = card(container)
             top = ctk.CTkFrame(row, fg_color="transparent")
             top.pack(fill="x", padx=12, pady=(8, 2))
@@ -382,6 +442,8 @@ def render_reference(container, ref_matches, ref_sources):
             badge(top, f"{h['file']} p.{h['page']}", theme.BG_SIDEBAR).pack(side="left", padx=(6, 0))
             ctk.CTkLabel(row, text=f"...{h['snippet']}...", font=theme.FONT_SMALL, text_color=theme.TEXT_SUB,
                          anchor="w", justify="left", wraplength=780).pack(fill="x", padx=12, pady=(0, 8))
+        if len(hits) > 30:
+            empty_note(container, f"외 {len(hits) - 30}건 더 있습니다.")
 
 
 def render_variance_tables(container, variance_tables, detected_unit, pm_threshold, variance_source=None):
@@ -397,8 +459,6 @@ def render_variance_tables(container, variance_tables, detected_unit, pm_thresho
         badge(info, f"금액차이 기준(PM): {pm_threshold:,.0f}", theme.VARIANCE_AMOUNT_COLOR).pack(side="left", padx=(0, 6))
     else:
         badge(info, "PM 미입력 - 금액차이 음영 비활성", theme.BG_SIDEBAR).pack(side="left", padx=(0, 6))
-    badge(info, "증감률 5%↑ 음영 항상 적용", theme.VARIANCE_PCT_COLOR).pack(side="left", padx=(0, 6))
-    badge(info, "두 조건 모두 해당", theme.VARIANCE_BOTH_COLOR).pack(side="left", padx=(0, 6))
 
     order = ["재무상태표", "손익계산서", "자본변동표", "현금흐름표"]
     for stmt in order:
@@ -424,14 +484,7 @@ def _render_variance_stmt(container, stmt_name, data):
                      anchor="w").grid(row=0, column=c, sticky="w", padx=8, pady=(8, 4))
 
     for r, row in enumerate(rows, start=1):
-        if row.get("amount_flag") and row.get("pct_flag"):
-            bg = theme.VARIANCE_BOTH_COLOR
-        elif row.get("amount_flag"):
-            bg = theme.VARIANCE_AMOUNT_COLOR
-        elif row.get("pct_flag"):
-            bg = theme.VARIANCE_PCT_COLOR
-        else:
-            bg = theme.BG_MAIN
+        bg = theme.VARIANCE_AMOUNT_COLOR if row.get("amount_flag") else theme.BG_MAIN
         pct_text = f"{row['pct'] * 100:,.1f}%" if row["pct"] is not None else "N/A"
         values = [
             row["label"], row.get("segment") or "-",
@@ -491,7 +544,7 @@ def render_excel_compare(container, compare_results):
     for c, h in enumerate(headers):
         ctk.CTkLabel(table, text=h, font=theme.FONT_SUBTITLE, text_color=theme.TEXT_MAIN,
                      anchor="w").grid(row=0, column=c, sticky="w", padx=8, pady=(8, 4))
-    for r, row in enumerate(compare_results[:300], start=1):
+    for r, row in enumerate(compare_results[:100], start=1):
         diff = row.get("차이")
         bg = theme.ACCENT_PEACH if (diff not in (None, 0)) else theme.BG_MAIN
         values = [row["구분표"], row["계정과목"], row["기간"],
@@ -505,5 +558,5 @@ def render_excel_compare(container, compare_results):
     table.grid_columnconfigure(1, weight=3)
     for c in (0, 2, 3, 4, 5):
         table.grid_columnconfigure(c, weight=1)
-    if len(compare_results) > 300:
-        empty_note(container, f"외 {len(compare_results) - 300}건 더 있습니다 (자동 저장된 Excel에서 전체 확인 가능).")
+    if len(compare_results) > 100:
+        empty_note(container, f"외 {len(compare_results) - 100}건 더 있습니다 (자동 저장된 Excel에서 전체 확인 가능).")

@@ -140,9 +140,8 @@ def build_variance_tables(doc: PdfDocument) -> dict:
 
 
 def apply_flags(variance_tables: dict, pm_threshold: float | None) -> dict:
-    """금액차이(PM 기준) / 증감률(5%) 초과 여부 플래그 부여."""
+    """금액차이(PM 기준) 초과 여부 플래그 부여. 증감률(pct)은 값만 계산해 표시하고 음영은 적용하지 않는다."""
     for data in variance_tables.values():
         for row in data["rows"]:
             row["amount_flag"] = bool(pm_threshold) and abs(row["diff"]) >= pm_threshold
-            row["pct_flag"] = row["pct"] is not None and abs(row["pct"]) >= 0.05
     return variance_tables

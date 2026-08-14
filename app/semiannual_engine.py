@@ -82,29 +82,6 @@ def load_excel_verification(excel_path: str | None) -> dict | None:
             "recon_results": recon_results, "compare_results": compare_results}
 
 
-def _auto_save_excel_report(excel_data: dict | None, company_name: str | None, period: str | None) -> str | None:
-    """회사명·기준년월이 모두 입력되어 있으면 검증 결과(+ 차이요약 하이퍼링크 시트)를
-    '회사명기준년월.xlsx'로 다운로드 폴더에 자동 저장한다."""
-    if not excel_data or not company_name or not period:
-        return None
-    import os
-    company_name, period = company_name.strip(), period.strip()
-    if not company_name or not period:
-        return None
-    filename = "".join(c for c in f"{company_name}{period}" if c not in '\\/:*?"<>|').strip() + ".xlsx"
-    downloads = os.path.join(os.path.expanduser("~"), "Downloads")
-    try:
-        os.makedirs(downloads, exist_ok=True)
-        save_path = os.path.join(downloads, filename)
-        report_wb = xlengine.build_report_workbook(
-            excel_data["path"], excel_data["sum_results"], excel_data["recon_results"],
-            excel_data["compare_results"], source_wb=excel_data["wb"], source_path=excel_data["path"])
-        report_wb.save(save_path)
-    except Exception:  # noqa: BLE001
-        return None
-    return save_path
-
-
 def _calc_check(doc: pdf_utils.PdfDocument, xbrl_source: str | None, xbrl_kind: str | None,
                  excel_data: dict | None, fs_kind: str | None) -> dict:
     """재무제표 계층별 합계검증(leaf 합계 -> 소계 -> 최상위 총계까지 전 레벨). PDF 기반은
@@ -224,7 +201,7 @@ def run_review(fs_type: str, accounting_standard: str, files: dict, settings: di
         "ref_sources": ref_sources_status,
         "not_supported": False,
         "excel_compare": excel_data["compare_results"] if excel_data else None,
-        "excel_report_path": None,
+        "excel_verify_data": excel_data,
         "sections": {},
     }
 
@@ -280,10 +257,6 @@ def run_review(fs_type: str, accounting_standard: str, files: dict, settings: di
         else:
             report("참조자료 매칭 대상 키워드 없음", 95)
             result["sections"]["reference_matches"] = {}
-
-    if excel_data:
-        report("Excel 정밀검증 결과 저장 중...", 98)
-        result["excel_report_path"] = _auto_save_excel_report(excel_data, company_name, period)
 
     report("완료", 100)
     return result

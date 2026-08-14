@@ -23,8 +23,6 @@ ACCENT_SKY_DARK = "#3E8FC7"
 
 # 재무제표 증감분석표 행 음영색
 VARIANCE_AMOUNT_COLOR = "#FFF3B0"   # 금액차이가 PM 기준 이상 - 연노랑
-VARIANCE_PCT_COLOR = "#FFD5A8"      # 증감률 5% 이상 - 살구색
-VARIANCE_BOTH_COLOR = "#FFC04D"     # 두 조건 모두 해당 - 진한 호박색
 
 
 def _hex_to_rgb(h: str) -> tuple[int, int, int]:
