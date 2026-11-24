@@ -46,11 +46,15 @@ AUDIT_CHECKLIST = [
 
 def evaluate_audit_checklist(text: str, extra_items: list[dict] | None = None) -> list[dict]:
     items = AUDIT_CHECKLIST + list(extra_items or [])
+    flat = re.sub(r"\s+", "", text)   # PDF 줄바꿈으로 '독\n립적이며'처럼 단어가 끊기는 경우 대비
     out = []
     for item in items:
         found, matched = False, None
         for kw in item.get("any_of", []):
-            m = re.search(kw, text) if item.get("regex") else (kw if kw in text else None)
+            if item.get("regex"):
+                m = re.search(kw, text) or re.search(kw.replace(r"\s*", ""), flat)
+            else:
+                m = kw if (kw in text or kw.replace(" ", "") in flat) else None
             if m:
                 found, matched = True, (m.group(0).strip() if item.get("regex") else kw)
                 break

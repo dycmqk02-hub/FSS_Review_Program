@@ -142,6 +142,7 @@ class App(ctk.CTk):
             command=lambda _v: self._rebuild_file_section(),
         )
         opt1.pack(fill="x", padx=22, pady=(0, 4))
+        self._opt1_widget = opt1
         self.audit_hint = ctk.CTkLabel(
             s, text="※ 감사보고서: 감사기준서 700/701/570 체크리스트·감사의견 판단 + 재무제표/주석 정밀 풋팅 결과가 '풋팅검증' 탭과 자동저장 Excel에 표시됩니다.",
             font=theme.FONT_SMALL, text_color=theme.ACCENT_PEACH_DARK, anchor="w", justify="left",
@@ -290,15 +291,15 @@ class App(ctk.CTk):
                       text_color=theme.TEXT_MAIN, command=self._on_next_review_no).pack(
             side="left", expand=True, fill="x", padx=(4, 0))
 
-        disclaimer = ("본 프로그램은 규칙·키워드 기반 1차 스크리닝 도구입니다. 합산검증, 문단46 "
-                      "필수기재사항, 회계처리변경 키워드, 증감분석 등을 자동 점검하되, 실질적 "
+        disclaimer = ("본 프로그램은 규칙·키워드 기반 1차 스크리닝 도구입니다. 재무제표·주석 풋팅, 필수 "
+                      "기재사항, 회계처리변경 키워드, 증감분석 등을 자동 점검하되, 실질적 "
                       "회계 판단·최종 검토의견은 반드시 검토자가 직접 수행하십시오.")
         ctk.CTkLabel(s, text=disclaimer, font=theme.FONT_SMALL, text_color=theme.TEXT_SUB,
                      anchor="w", justify="left", wraplength=252).pack(fill="x", padx=22, pady=(20, 16))
 
     def _refresh_audit_hint(self):
         if self.report_type.get() == "감사":
-            self.audit_hint.pack(fill="x", padx=22, pady=(0, 0))
+            self.audit_hint.pack(fill="x", padx=22, pady=(0, 0), after=self._opt1_widget)
         else:
             self.audit_hint.pack_forget()
 
@@ -571,6 +572,7 @@ class App(ctk.CTk):
 
         sections = result["sections"]
         is_dual = "consol_vs_sep" in sections
+        doc_word = "감사보고서" if result.get("report_type") == "감사" else "검토보고서"
 
         # 요약 탭
         summary = self.scroll_frames["요약"]
@@ -601,11 +603,11 @@ class App(ctk.CTk):
         # 체크리스트 탭
         checklist_tab = self.scroll_frames["체크리스트"]
         if is_dual:
-            rh.doc_label_title(checklist_tab, "연결재무제표 검토보고서")
+            rh.doc_label_title(checklist_tab, f"연결재무제표 {doc_word}")
             rh.render_checklist(checklist_tab, sections["consol"]["checklist"])
             rh.render_opinion(checklist_tab, sections["consol"]["opinion"])
             rh.render_comparative(checklist_tab, sections["consol"]["comparative"])
-            rh.doc_label_title(checklist_tab, "별도재무제표 검토보고서")
+            rh.doc_label_title(checklist_tab, f"별도재무제표 {doc_word}")
             rh.render_checklist(checklist_tab, sections["separate"]["checklist"])
             rh.render_opinion(checklist_tab, sections["separate"]["opinion"])
             rh.render_comparative(checklist_tab, sections["separate"]["comparative"])
@@ -618,7 +620,10 @@ class App(ctk.CTk):
 
         # 숫자 스크리닝 탭
         num_tab = self.scroll_frames["숫자 스크리닝"]
-        if is_dual:
+        if result.get("report_type") == "감사":
+            rh.empty_note(num_tab, "감사보고서는 좌표 기반 정밀 풋팅을 수행하므로 표 합계 검산 결과는 '풋팅검증' 탭의 "
+                                   "예외 목록(불일치·단수차이·부호/표기 확인·미발견)에서 확인하십시오.")
+        elif is_dual:
             rh.doc_label_title(num_tab, "연결재무제표")
             rh.render_sum_check(num_tab, sections["consol"]["sum_check"])
             rh.render_cross_check(num_tab, sections["consol"]["cross_check"])
@@ -713,6 +718,16 @@ class App(ctk.CTk):
         req_missing = sum(1 for i in data["checklist"] if i.get("required") and not i["found"])
         rh.badge(row, f"체크리스트 {found_n}/{len(data['checklist'])}",
                   theme.ACCENT_MINT if req_missing == 0 else theme.ACCENT_CORAL).pack(side="left", padx=4)
+        if data.get("footing_summary"):
+            fs = data["footing_summary"]
+            bad = sum(a["mismatch"] for a in fs)
+            chk = sum(a["rounding"] + a["other"] for a in fs)
+            rh.badge(row, f"풋팅 {sum(a['total'] for a in fs):,}건 검증", theme.ACCENT_SKY).pack(side="left", padx=4)
+            rh.badge(row, f"불일치 {bad}건", theme.ACCENT_CORAL if bad else theme.ACCENT_MINT).pack(side="left", padx=4)
+            rh.badge(row, f"단수차이·확인필요 {chk}건", theme.ACCENT_PEACH if chk else theme.ACCENT_MINT).pack(side="left", padx=4)
+            rh.badge(row, f"회계처리변경 키워드 {len(data['accounting_changes'])}건", theme.ACCENT_SKY).pack(side="left", padx=4)
+            rh.badge(row, f"총 {data['page_count']}p", theme.BG_SIDEBAR).pack(side="left", padx=4)
+            return
         rh.badge(row, f"합계검산 불일치 {len(data['sum_check'])}건",
                   theme.ACCENT_MINT if not data["sum_check"] else theme.ACCENT_CORAL).pack(side="left", padx=4)
         calc_check = data.get("calc_check") or {}

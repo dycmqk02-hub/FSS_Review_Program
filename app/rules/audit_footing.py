@@ -1248,7 +1248,7 @@ def to_cross_check_fs(rep: Report) -> list:
     res = []
     for c in rep.cross_checks:
         if c['결과'] != OK:
-            res.append({'item': c['검증항목'], 'diff': c['차이'],
+            res.append({'item': c['검증항목'], 'diff': c['차이'], 'result': c['결과'],
                         'values': [{'source': '기준', 'label': c['기준'], 'value': c['기준금액'] or 0},
                                    {'source': '대사', 'label': c['대사'], 'value': c['대사금액'] or 0}]})
     return res
@@ -1340,6 +1340,8 @@ def exceptions(rep: Report) -> list:
     for c in getattr(rep, 'special', []):
         if c['결과'] != OK:
             ex.append(('특수검증', '', str(c['비고']).replace('p.', ''), c['검증항목'], f"{c['기준']} / {c['대사']}", c['기준금액'], c['대사금액'], c['결과']))
+    order = {'불일치': 0, '부호표시 확인': 1, '표기 확인': 2, '단수차이': 3}
+    ex.sort(key=lambda e: order.get(e[7], 4))   # 심각도 순 (불일치 → 부호/표기 → 단수차이 → 미발견 등)
     return ex
 
 
@@ -1362,10 +1364,15 @@ def compare_consol_separate_amounts(con: Report, sep: Report) -> list:
                 continue
             seen.add(k)
             s = smap.get(k)
+            if s is None:
+                st = '별도에 없음'
+            else:
+                cy_same, py_same = r['cy'] == s['cy'], (r['py'] or 0) == (s['py'] or 0)
+                st = '동일' if cy_same and py_same else ('당기 동일·전기 차이' if cy_same else ('당기 차이·전기 동일' if py_same else '당기·전기 차이'))
             out.append({'stmt': stmt, 'label': r['label'], 'consol_cy': r['cy'], 'sep_cy': s['cy'] if s else None,
                         'diff_cy': (r['cy'] - s['cy']) if s else None, 'consol_py': r['py'],
-                        'sep_py': s['py'] if s else None, 'diff_py': (r['py'] - s['py']) if s else None,
-                        'status': ('동일' if s and r['cy'] == s['cy'] and r['py'] == s['py'] else ('차이' if s else '별도에 없음'))})
+                        'sep_py': s['py'] if s else None, 'diff_py': ((r['py'] or 0) - (s['py'] or 0)) if s else None,
+                        'status': st})
         ckeys = {key(r['label']) for r in con.fs_rows.get(code, []) if r['cy'] is not None}
         for k, s in smap.items():
             if k not in ckeys:
