@@ -12,13 +12,6 @@ def _base_dir() -> str:
     return os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
-def resource_path(*parts: str) -> str:
-    """번들 리소스(resources/) 경로. PyInstaller onefile 임시폴더도 고려."""
-    if getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS"):
-        return os.path.join(sys._MEIPASS, "resources", *parts)
-    return os.path.join(_base_dir(), "resources", *parts)
-
-
 CONFIG_PATH = os.path.join(_base_dir(), "config.json")
 
 
@@ -39,9 +32,6 @@ DEFAULTS = {
     "kgaap_folder": _DEFAULT_STANDARDS_ROOT + r"\일반기업회계기준",
     "kifrs_folder": _DEFAULT_STANDARDS_ROOT + r"\KIFRS",
     "kifrs_early_folder": _DEFAULT_STANDARDS_ROOT + r"\KIFRS_조기적용가능",
-    "custom_checklist_path": "",
-    "checklist_kifrs_path": _DEFAULT_STANDARDS_ROOT + r"\감사조서서식_8400 공시사항점검표 (KIFRS용)_2025.xls",
-    "checklist_kgaap_path": _DEFAULT_STANDARDS_ROOT + r"\감사조서서식_8400 공시사항점검표 (일반기준용)_2025.xlsx",
     "last_report_type": "분반기",
     "last_fs_type": "연결",
     "last_accounting_standard": "KIFRS",

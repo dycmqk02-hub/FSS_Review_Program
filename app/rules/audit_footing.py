@@ -381,6 +381,7 @@ class Report:
             if all(v is None for v in vals):
                 continue
             rows.append(dict(page=pg, label=label, n=norm(label), vals=vals))
+        names = [re.sub(r'^(지배기업의?소유주에게)?(귀속되는자본)?', '', n) or n for n in names]
         self.sce = dict(cols=cols, names=names, rows=rows)
 
     def foot_sce(self):
@@ -440,6 +441,33 @@ class Report:
         if len(ends) >= 2 and len(begs) >= 2:
             for j, nm in enumerate(names):
                 self._add_x(f'전기말=당기초 [{nm}]', '자본변동표 전기말', ends[0]['vals'][j], '자본변동표 당기초', begs[1]['vals'][j])
+        # [연속성] 현금흐름표 당기 기초현금 = 현금흐름표 전기 기말현금
+        if cf_beg and cf_end:
+            self._add_x('[연속성] 현금흐름표 기초현금(당기) = 기말현금(전기)', '현금흐름표 당기 기초현금', cf_beg['cy'],
+                        '현금흐름표 전기 기말현금', cf_end['py'])
+        # [연속성] 자본변동표 당기초 = 재무상태표 전기말 자본항목
+        keymap0 = [('자본금', '자본금'), ('주식발행초과금', '주식발행초과금'), ('기타자본', '기타자본'),
+                   ('결손금', '이익잉여금'), ('이익잉여금', '이익잉여금'), ('비지배', '비지배지분')]
+        tot_bs0 = next((r for r in bs if r['n'] == '자본총계'), None)
+        if len(begs) >= 2:
+            for j, nm in enumerate(names):
+                tgt = None
+                for k, b in keymap0:
+                    if k in nm:
+                        tgt = next((r for r in bs if r['n'].startswith(b)), None); break
+                if ('합계' in nm or '총계' in nm) and j == tot_col:
+                    tgt = tot_bs0
+                if tgt is not None:
+                    self._add_x(f'[연속성] 자본변동표 당기초 = 재무상태표 전기말 [{nm}]', f'자본변동표 당기초 {nm}', begs[1]['vals'][j],
+                                f"재무상태표 전기말 {tgt['label']}", tgt['py'])
+        # [연속성] 재무상태표 이익잉여금(결손금): 전기말 + 당기순이익 + 기타 변동(자본변동표) = 당기말
+        re_bs = next((r for r in bs if r['n'].startswith('이익잉여금') or r['n'].startswith('결손금')), None)
+        re_col = next((j for j, nm in enumerate(names) if '결손금' in nm or '이익잉여금' in nm), None)
+        if re_bs and ni and re_col is not None and len(begs) >= 2 and len(ends) >= 2:
+            i0 = rows.index(begs[1]); i1 = rows.index(ends[1])
+            others = sum((r['vals'][re_col] or 0) for r in rows[i0 + 1:i1] if '당기순' not in r['n'])
+            self._add_x('[연속성] 이익잉여금: 전기말 + 당기순이익 + 기타변동 = 당기말', '재무상태표 이익잉여금(당기말)', re_bs['cy'],
+                        f'전기말 {re_bs["py"]:,.0f} + 순이익 {ni["cy"]:,.0f} + 기타 {others:,.0f}', re_bs['py'] + ni['cy'] + others)
         # 자본변동표 기말 ↔ 재무상태표 자본항목
         keymap = [('자본금', '자본금'), ('주식발행초과금', '주식발행초과금'), ('기타자본', '기타자본'),
                   ('결손금', '이익잉여금'), ('이익잉여금', '이익잉여금'), ('비지배', '비지배지분')]
@@ -618,14 +646,25 @@ class Report:
             self._add_note(t, '전기말→당기초', f"{beg['label']} vs {end['label']}", '당기 기초 / 전기 기말', b[jc], e[jp], 0,
                            '당기 기초 = 전기 기말 (같은 표의 당기열·전기열)', override=None if abs(b[jc] - e[jp]) > 0 else '일치')
 
+    @staticmethod
+    def period_tag(t):
+        """'1) 당기' / '(2) 전기' / '1) 당기말' 처럼 표 제목이 기간만 나타내면 '당기'/'전기' 반환."""
+        for txt in (t.get('subsub', ''), t.get('sub', '')):
+            k = re.sub(r'^\(?\d+\)\s*', '', txt or '').replace(' ', '')
+            if k in ('당기', '당기말'):
+                return '당기'
+            if k in ('전기', '전기말'):
+                return '전기'
+        return None
+
     def _continuity_split_tables(self):
         """'1) 당기' / '2) 전기'로 나뉜 변동표: 당기표 기초 = 전기표 기말 (세로형은 열별, 가로형은 행 라벨별)."""
         tabs = self.note_tables
         for i, cur in enumerate(tabs):
-            if cur.get('subsub', '').replace(' ', '') != '1)당기':
+            if self.period_tag(cur) != '당기':
                 continue
-            pri = next((t for t in tabs[i + 1:i + 4] if t['note'] == cur['note'] and t.get('sub') == cur.get('sub')
-                        and re.match(r'^2\)\s*전기$', t.get('subsub', '').replace(' ', ''))), None)
+            pri = next((t for t in tabs[i + 1:i + 4] if t['note'] == cur['note'] and self.period_tag(t) == '전기'
+                        and (t.get('sub') == cur.get('sub') or not cur.get('subsub'))), None)
             if pri is None or not cur['cols'] or not pri['cols']:
                 continue
             beg = next((r for r in cur['rows'] if r['nums'] and r['n'].startswith('기초')), None)
@@ -972,6 +1011,48 @@ class Report:
                     self.fs_note_checks.append(dict(재무제표=stmap[st], 계정과목=r['label'], 주석번호=r['notes'], 기간=plabel,
                                                     재무제표금액_원=val, 주석금액=tv, 주석위치=loc, 결과=res))
 
+    def note_rollforward_vs_bs(self):
+        """주석 변동표 기말이 재무상태표 당기말과 맞으면, 같은 열/행의 기초가 재무상태표 전기말과 맞는지 확인."""
+        bs = [r for r in self.fs_rows.get('BS', []) if r['notes'] and r['cy'] is not None and r['py'] is not None]
+        seen = set()
+        for t in self.note_tables:
+            scale = {'천원': 1000, '백만원': 1e6, '원': 1}.get(t['unit'])
+            if not scale or not t['cols']:
+                continue
+            cands = [r for r in bs if t['note'] in [int(x) for x in r['notes'].split(',') if x.strip().isdigit()]]
+            if not cands or self.period_tag(t) == '전기':
+                continue   # 전기 변동표는 기말이 당기말과 우연히 같을 수 있어 제외
+            pairs = []   # (기초값, 기말값, 위치설명)
+            rows = [r for r in t['rows'] if r['nums']]
+            beg = next((r for r in rows if r['n'].startswith('기초')), None)
+            end = next((r for r in rows[rows.index(beg) + 1:] if r['n'].startswith('기말')), None) if beg else None
+            if beg and end:
+                b, e = self._rowvec(t, beg), self._rowvec(t, end)
+                for j in set(b) & set(e):
+                    if '전기' in (t['colnames'][j] or ''):
+                        continue
+                    pairs.append((b[j], e[j], f"{t['colnames'][j] or f'열{j + 1}'} 열 기초/기말"))
+            jb = self._col_idx(t, '기초', '기초잔액', '기초금액', '기초장부금액')
+            je = self._col_idx(t, '기말', '기말잔액', '기말금액', '기말장부금액')
+            if jb is not None and je is not None:
+                for r in rows:
+                    v = self._rowvec(t, r)
+                    if jb in v and je in v:
+                        pairs.append((v[jb], v[je], f"'{r['label']}' 행 기초/기말"))
+            for bv, ev, where in pairs:
+                for f in cands:
+                    if abs(ev - f['cy'] / scale) <= 1 and ev != 0:
+                        key = (f['label'], t['id'], where)
+                        if key in seen:
+                            continue
+                        seen.add(key)
+                        diff = bv - round(f['py'] / scale)
+                        self.cross_checks.append(dict(
+                            검증항목=f"[연속성] 주석{t['note']} 변동표 기초 = 재무상태표 전기말 [{f['label']}]",
+                            기준=f"주석{t['note']} p.{self.pg(t['page'])} {where} (기말 {ev:,.0f}=당기말 확인)", 기준금액=bv,
+                            대사=f"재무상태표 전기말 {f['label']} ({t['unit']} 환산)", 대사금액=round(f['py'] / scale),
+                            차이=diff, 결과=status(diff, 1)))
+
     def _find_in_note_text(self, refs, val):
         """표에서 못 찾은 금액을 참조 주석의 서술문에서 탐색 (예: '자본금은 122,578,871천원입니다').
         기존 프로그램(pdf_note_check)의 '주석 안에 금액이 등장하는가' 방식을 보조 수단으로 결합."""
@@ -1124,6 +1205,7 @@ class Report:
         steps = [('재무제표 파싱', self.parse_statements), ('재무상태표', self.foot_bs), ('손익계산서', self.foot_is),
                  ('현금흐름표', self.foot_cf), ('자본변동표', self.foot_sce), ('재무제표간 대사', self.cross_statements),
                  ('주석 표 파싱', self.parse_notes), ('주석 풋팅', self.foot_notes), ('재무제표-주석 대사', self.fs_vs_notes),
+                 ('주석 변동표-재무상태표 연속성', self.note_rollforward_vs_bs),
                  ('본문 서술금액', self.narrative), ('특수검증', self.special_checks)]
         for name, fn in steps:
             try:

@@ -34,18 +34,10 @@ class SettingsDialog(ctk.CTkToplevel):
         self.kgaap_var = ctk.StringVar(value=self.settings.get("kgaap_folder", ""))
         self.kifrs_var = ctk.StringVar(value=self.settings.get("kifrs_folder", ""))
         self.kifrs_early_var = ctk.StringVar(value=self.settings.get("kifrs_early_folder", ""))
-        self.checklist_var = ctk.StringVar(value=self.settings.get("custom_checklist_path", ""))
-        self.checklist_kifrs_var = ctk.StringVar(value=self.settings.get("checklist_kifrs_path", ""))
-        self.checklist_kgaap_var = ctk.StringVar(value=self.settings.get("checklist_kgaap_path", ""))
 
         self._folder_row(body, "일반기업회계기준(K-GAAP) 폴더", self.kgaap_var)
         self._folder_row(body, "KIFRS 폴더 (시행중)", self.kifrs_var)
         self._folder_row(body, "KIFRS 폴더 (조기적용가능)", self.kifrs_early_var)
-        self._file_row(body, "공시사항점검표 8400 (KIFRS용, .xls)", self.checklist_kifrs_var,
-                       filetypes=[("Excel", "*.xls *.xlsx")])
-        self._file_row(body, "공시사항점검표 8400 (일반기준용, .xlsx)", self.checklist_kgaap_var,
-                       filetypes=[("Excel", "*.xls *.xlsx")])
-        self._file_row(body, "커스텀 체크리스트 파일 (CSV/XLSX, 추후 추가 예정)", self.checklist_var)
 
         btn_row = ctk.CTkFrame(body, fg_color="transparent")
         btn_row.pack(pady=24)
@@ -106,8 +98,5 @@ class SettingsDialog(ctk.CTkToplevel):
         self.settings["kgaap_folder"] = self.kgaap_var.get().strip()
         self.settings["kifrs_folder"] = self.kifrs_var.get().strip()
         self.settings["kifrs_early_folder"] = self.kifrs_early_var.get().strip()
-        self.settings["custom_checklist_path"] = self.checklist_var.get().strip()
-        self.settings["checklist_kifrs_path"] = self.checklist_kifrs_var.get().strip()
-        self.settings["checklist_kgaap_path"] = self.checklist_kgaap_var.get().strip()
         self.on_save(self.settings)
         self.destroy()

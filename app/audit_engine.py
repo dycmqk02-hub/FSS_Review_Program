@@ -16,10 +16,9 @@ from .rules.accounting_change import detect_accounting_changes
 from .rules.sum_check import check_table_sums
 from .rules.reference_lookup import search_sources, folder_status
 from .rules.consol_vs_sep import compare_consol_separate
-from .rules.custom_checklist import load_custom_checklist
 from .rules.variance_analysis import apply_flags, detect_unit
-from .rules.disclosure_checklist import check_disclosure
 from .rules import audit_footing as af
+from .rules import xbrl_pdf_tieout as xt
 from . import semiannual_engine as se
 
 FS_TYPE_CHOICES = ["연결", "별도", "개별", "연결 vs 별도"]
@@ -51,8 +50,8 @@ def _prior_review(prior_path: str | None, rep, label: str) -> dict | None:
         return {"file": os.path.basename(prior_path), "overview": None, "fs_compare": [], "error": str(e)}
 
 
-def _single_doc_review(path: str, label: str, custom_items, pm_threshold, xbrl_source, xbrl_kind,
-                        excel_data, accounting_standard, settings, report=None, prior_path: str | None = None) -> dict:
+def _single_doc_review(path: str, label: str, pm_threshold, xbrl_source, xbrl_kind,
+                        report=None, prior_path: str | None = None) -> dict:
     doc = pdf_utils.load_pdf(path)
     if report:
         report(f"{label} 정밀 풋팅(재무제표·주석 표 좌표 분석) 중...", None)
@@ -65,10 +64,12 @@ def _single_doc_review(path: str, label: str, custom_items, pm_threshold, xbrl_s
         calc["xbrl"] = se._calc_check(doc, xbrl_source, xbrl_kind, None, None).get("xbrl")
         cross["xbrl"] = se._cross_check_fs(doc, xbrl_source, xbrl_kind, None, None).get("xbrl")
         note["xbrl"] = se._note_check(doc, xbrl_source, xbrl_kind).get("xbrl")
-    if excel_data and xbrl_kind:
-        from .rules import excel_review_engine as xlengine
-        calc["excel"] = xlengine.build_calc_check_from_excel(excel_data["sum_results"], xbrl_kind)
-        cross["excel"] = xlengine.build_cross_check_from_excel(excel_data["recon_results"], xbrl_kind)
+    tie = None
+    if xbrl_source and xbrl_kind:   # PDF 재무제표 ↔ XBRL 계정별 대사 (+ 전전기말 연속성)
+        try:
+            tie = xt.tieout(rep, xbrl_source, xbrl_kind)
+        except Exception as e:  # noqa: BLE001
+            tie = {"rows": [], "continuity": [], "error": f"{type(e).__name__}: {e}"}
 
     variance = af.to_variance_tables(rep)
     variance_source = "PDF 재무제표 본문(정밀 풋팅 엔진)"
@@ -85,7 +86,7 @@ def _single_doc_review(path: str, label: str, custom_items, pm_threshold, xbrl_s
     return {
         "overview": build_overview(doc.full_text, rep),
         "prior": _prior_review(prior_path, rep, label),
-        "checklist": evaluate_audit_checklist(doc.full_text, custom_items),
+        "checklist": evaluate_audit_checklist(doc.full_text),
         "opinion": detect_audit_opinion(doc.full_text),
         "comparative": check_comparative(doc.full_text),
         "accounting_changes": detect_accounting_changes(doc.pages),
@@ -96,12 +97,12 @@ def _single_doc_review(path: str, label: str, custom_items, pm_threshold, xbrl_s
         "calc_check": calc,
         "cross_check_fs": cross,
         "note_check": note,
-        "disclosure_check": check_disclosure(doc.full_text, accounting_standard, settings or {}),
         "detected_unit": detect_unit(doc.full_text),
         "pm_threshold": pm_threshold,
         "page_count": doc.page_count(),
         "footing": rep,
-        "footing_summary": af.summary_counts(rep),
+        "footing_summary": af.summary_counts(rep) + ([xt.summary(tie)] if tie and not tie.get("error") else []),
+        "xbrl_tieout": tie,
         "footing_errors": getattr(rep, "errors", []),
         "legacy": {"sum_check": legacy_sum},
     }
@@ -109,35 +110,28 @@ def _single_doc_review(path: str, label: str, custom_items, pm_threshold, xbrl_s
 
 def run_review(fs_type: str, accounting_standard: str, files: dict, settings: dict,
                pm_consol: float | None = None, pm_separate: float | None = None,
-               xbrl_source: str | None = None, excel_path: str | None = None,
-               company_name: str | None = None, period: str | None = None, progress_cb=None) -> dict:
+               xbrl_source: str | None = None, progress_cb=None) -> dict:
     def report(msg, pct):
         if progress_cb and pct is not None:
             progress_cb(msg, pct)
 
-    custom_items = load_custom_checklist(settings.get("custom_checklist_path", ""))
     ref_sources = se._ref_sources(accounting_standard, settings)
-    excel_data = se.load_excel_verification(excel_path)
     result = {
         "report_type": "감사",
         "fs_type": fs_type,
         "accounting_standard": accounting_standard,
         "ref_sources": [{"label": l, "status": folder_status(f)} for l, f in ref_sources],
         "not_supported": False,
-        "excel_compare": excel_data["compare_results"] if excel_data else None,
-        "excel_verify_data": excel_data,
         "sections": {},
     }
 
     if fs_type == "연결 vs 별도":
         report("연결 감사보고서 분석/풋팅 중...", 5)
-        result["sections"]["consol"] = _single_doc_review(files["consol"], "연결", custom_items, pm_consol, xbrl_source,
-                                                           "consolidated", excel_data, accounting_standard, settings,
-                                                           prior_path=files.get("prior_consol"))
+        result["sections"]["consol"] = _single_doc_review(files["consol"], "연결", pm_consol, xbrl_source,
+                                                           "consolidated", prior_path=files.get("prior_consol"))
         report("별도 감사보고서 분석/풋팅 중...", 40)
-        result["sections"]["separate"] = _single_doc_review(files["separate"], "별도", custom_items, pm_separate,
-                                                             xbrl_source, "separate", excel_data, accounting_standard,
-                                                             settings, prior_path=files.get("prior_separate"))
+        result["sections"]["separate"] = _single_doc_review(files["separate"], "별도", pm_separate,
+                                                             xbrl_source, "separate", prior_path=files.get("prior_separate"))
         report("연결 vs 별도 비교 중...", 75)
         cdoc = pdf_utils.load_pdf(files["consol"], extract_tables=False)
         sdoc = pdf_utils.load_pdf(files["separate"], extract_tables=False)
@@ -149,9 +143,8 @@ def run_review(fs_type: str, accounting_standard: str, files: dict, settings: di
     else:
         report(f"{fs_type} 감사보고서 분석/풋팅 중...", 10)
         pm = se._resolve_pm(fs_type, pm_consol, pm_separate)
-        result["sections"]["single"] = _single_doc_review(files["main"], fs_type, custom_items, pm, xbrl_source,
-                                                          se.FS_TYPE_TO_XBRL_KIND.get(fs_type), excel_data,
-                                                          accounting_standard, settings,
+        result["sections"]["single"] = _single_doc_review(files["main"], fs_type, pm, xbrl_source,
+                                                          se.FS_TYPE_TO_XBRL_KIND.get(fs_type),
                                                           prior_path=files.get("prior_main"))
         docs = [result["sections"]["single"]]
 

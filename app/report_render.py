@@ -65,7 +65,6 @@ def _render_single(title: str, data: dict) -> str:
     lines.append(_render_calc_check(data.get("calc_check", {})))
     lines.append(_render_cross_check_fs(data.get("cross_check_fs", {})))
     lines.append(_render_note_check(data.get("note_check", {})))
-    lines.append(_render_disclosure_check(data.get("disclosure_check", {})))
 
     return "\n".join(lines)
 
@@ -160,26 +159,6 @@ def _render_note_check(note_check: dict) -> str:
     return "\n".join(lines)
 
 
-def _render_disclosure_check(disclosure_check: dict) -> str:
-    lines = ["  [공시사항점검표 대사 - 감사조서서식 8400, 키워드 매칭 휴리스틱]"]
-    err = disclosure_check.get("error")
-    if err:
-        lines.append(f"   - {err}")
-        return "\n".join(lines)
-    items = disclosure_check.get("items", [])
-    if not items:
-        lines.append("   - 대사할 항목이 없습니다.")
-        return "\n".join(lines)
-    n_found = sum(1 for i in items if i["found"])
-    lines.append(f"   - 점검표: {disclosure_check.get('path')}")
-    lines.append(f"   - 확인 {n_found} / 미확인 {len(items) - n_found} (총 {len(items)}건)")
-    for i in items:
-        if i["found"]:
-            continue
-        lines.append(f"     - [{i.get('section') or ''}] [{i['reference']}] {i['text'][:100]}")
-    return "\n".join(lines)
-
-
 def _render_variance(variance_tables: dict, unit: str | None, pm_threshold: float | None) -> str:
     lines = ["  [재무제표 증감분석 - 당기 vs 전기 (휴리스틱)]"]
     if unit:
@@ -215,23 +194,6 @@ def _render_consol_vs_sep(data: dict) -> str:
     for item in data["practice_checklist"]:
         lines.append(f"   - {item['item']}")
         lines.append(f"     -> {item['note']}")
-    return "\n".join(lines)
-
-
-def _render_excel_compare(compare_results: list | None) -> str:
-    lines = ["[연결-별도 비교 - Excel 정밀검증, 계정과목 단위]"]
-    if not compare_results:
-        lines.append("   - Excel 정밀검증 파일이 준비되지 않았습니다.")
-        return "\n".join(lines)
-    n_diff = sum(1 for r in compare_results if (r.get("차이") or 0) != 0)
-    lines.append(f"   - 비교 {len(compare_results)}건 중 차이 존재 {n_diff}건 (차이가 있다고 오류는 아님)")
-    for r in compare_results[:60]:
-        lines.append(f"   - [{r['구분표']}] {r['계정과목']}({r['기간']}): "
-                     f"별도 {r['별도']:,.0f} vs 연결 {r['연결']:,.0f} (차이 {r['차이']:,.0f})"
-                     if r.get("별도") is not None and r.get("연결") is not None else
-                     f"   - [{r['구분표']}] {r['계정과목']}({r['기간']}): 별도 {r.get('별도')} / 연결 {r.get('연결')}")
-    if len(compare_results) > 60:
-        lines.append(f"   - 외 {len(compare_results) - 60}건 (GUI 화면 또는 자동 저장된 Excel에서 전체 확인 가능)")
     return "\n".join(lines)
 
 
@@ -298,8 +260,6 @@ def render_text_report(result: dict) -> str:
         lines.append("")
         lines.append(_render_single(f"[{result['fs_type']} {result['report_type']}보고서]", sections["single"]))
         lines.append("")
-        lines.append(_render_excel_compare(result.get("excel_compare")))
-        lines.append("")
         lines.append(_render_reference(sections.get("reference_matches", {}), result.get("ref_sources", [])))
     else:
         lines.append("")
@@ -308,8 +268,6 @@ def render_text_report(result: dict) -> str:
         lines.append(_render_single(f"[별도재무제표 {doc_word}]", sections["separate"]))
         lines.append("")
         lines.append(_render_consol_vs_sep(sections["consol_vs_sep"]))
-        lines.append("")
-        lines.append(_render_excel_compare(result.get("excel_compare")))
         lines.append("")
         lines.append(_render_reference(sections.get("reference_matches", {}), result.get("ref_sources", [])))
 

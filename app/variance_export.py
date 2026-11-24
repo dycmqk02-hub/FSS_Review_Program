@@ -140,22 +140,15 @@ def _add_audit_overview(wb, result: dict) -> None:
             continue
         prior = d.get("prior") or {}
         docs.append((lbl, d["overview"], prior.get("overview"), prior.get("file")))
+        tie = d.get("xbrl_tieout")
+        if tie:
+            from .rules import xbrl_pdf_tieout as xt
+            xt.add_tieout_sheet(wb, f"{lbl}_XBRL대사" if key != "single" else "XBRL대사", tie)
         if prior.get("fs_compare"):
             af.add_prior_sheet(wb, f"{lbl}_전기보고서대사" if key != "single" else "전기보고서대사", prior["fs_compare"])
     af.add_overview_sheet(wb, docs)
 
 
 def _add_tail_sheets(wb, result: dict) -> None:
-    excel_data = result.get("excel_verify_data")
-    if excel_data:
-        from .rules import excel_review_engine as xlengine
-        xlengine.add_verification_sheets(
-            wb, excel_data["sum_results"], excel_data["recon_results"], excel_data["compare_results"],
-            source_wb=excel_data["wb"], source_path=excel_data["path"])
-        wb.active = 0
-
-    for label, text in (result.get("ai_reviews") or {}).items():
-        ai_ws = wb.create_sheet(f"AI심층분석_{label}"[:31])
-        ai_ws.column_dimensions["A"].width = 120
-        for line in text.splitlines():
-            ai_ws.append([line])
+    """(예비) 추가 시트 훅 - Excel 정밀검증/AI 심층리뷰 기능 제거로 현재는 추가 시트 없음."""
+    return None
