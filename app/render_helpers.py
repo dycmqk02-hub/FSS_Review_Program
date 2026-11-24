@@ -115,7 +115,7 @@ def empty_note(parent, text):
 
 
 def render_checklist(container, items):
-    section_title(container, "필수 기재사항 체크리스트 (문단46 등)")
+    section_title(container, "필수 기재사항 체크리스트 (검토: 준칙 문단46 / 감사: 감사기준서 700·701·570 등)")
     found_n = sum(1 for i in items if i["found"])
     req_missing = [i for i in items if i.get("required") and not i["found"]]
     stat_row = ctk.CTkFrame(container, fg_color="transparent")
@@ -147,7 +147,7 @@ def render_checklist(container, items):
 
 
 def render_opinion(container, opinion_data):
-    section_title(container, "검토의견 유형 판단")
+    section_title(container, "의견 유형 판단 (검토의견 / 감사의견)")
     op_type = opinion_data["opinion_type"]
     color_map = {
         "적정(변형 없음)": theme.ACCENT_MINT,
@@ -533,6 +533,16 @@ def render_consol_vs_sep(container, data):
         badge(top, "별도 O" if c["in_separate"] else "별도 X",
               theme.ACCENT_MINT if c["in_separate"] else theme.ACCENT_CORAL).pack(side="left", padx=4)
 
+    amt = data.get("amount_comparison") or []
+    if amt:
+        section_title(container, "연결 vs 별도 재무제표 계정별 금액 비교 (차이 = 검토포인트, 오류 아님)")
+        diff_rows = [r for r in amt if r["status"] != "동일"]
+        badge(container, f"비교 {len(amt)}계정 / 동일 {len(amt) - len(diff_rows)} / 차이·한쪽만 {len(diff_rows)}",
+              theme.ACCENT_SKY).pack(anchor="w", padx=4, pady=(0, 6))
+        _simple_table(container, ["재무제표", "계정과목", "연결 당기", "별도 당기", "차이(당기)", "상태"],
+                      [[r["stmt"], r["label"], _fmt(r["consol_cy"]), _fmt(r["sep_cy"]), _fmt(r["diff_cy"]), r["status"]]
+                       for r in diff_rows[:60]])
+
     section_title(container, "실무 참고 체크리스트 (준칙 명문조항은 아님)")
     for item in data["practice_checklist"]:
         row = card(container)
@@ -580,3 +590,60 @@ def render_excel_compare(container, compare_results):
         table.grid_columnconfigure(c, weight=1)
     if len(compare_results) > 100:
         empty_note(container, f"외 {len(compare_results) - 100}건 더 있습니다 (자동 저장된 Excel에서 전체 확인 가능).")
+
+
+def _fmt(v):
+    return "-" if v is None else f"{v:,.0f}"
+
+
+def _simple_table(container, headers, rows, highlight_col=None):
+    table = ctk.CTkFrame(container, fg_color=theme.BG_CARD, corner_radius=10,
+                          border_width=1, border_color=theme.BORDER_SOFT)
+    table.pack(fill="x", pady=4, padx=4)
+    for c, h in enumerate(headers):
+        ctk.CTkLabel(table, text=h, font=theme.FONT_SUBTITLE, text_color=theme.TEXT_MAIN,
+                     anchor="w").grid(row=0, column=c, sticky="w", padx=8, pady=(8, 4))
+    for r, vals in enumerate(rows, start=1):
+        bg = theme.BG_MAIN
+        if highlight_col is not None:
+            v = str(vals[highlight_col])
+            bg = theme.ACCENT_MINT if v.startswith("일치") else (theme.ACCENT_CORAL if v == "불일치" else theme.ACCENT_PEACH)
+        for c, v in enumerate(vals):
+            ctk.CTkLabel(table, text=str(v), font=theme.FONT_SMALL, text_color=theme.TEXT_MAIN, fg_color=bg,
+                         corner_radius=4, anchor="e" if isinstance(v, str) and v[:1].isdigit() or str(v)[:1] in "(-" else "w",
+                         wraplength=320).grid(row=r, column=c, sticky="ew", padx=2, pady=1, ipady=3, ipadx=4)
+    for c in range(len(headers)):
+        table.grid_columnconfigure(c, weight=1)
+
+
+def render_footing(container, data):
+    """감사보고서 정밀 풋팅 결과 - 영역별 요약 + 예외 목록 (전체 내역은 Excel 시트)."""
+    summary = data.get("footing_summary")
+    rep = data.get("footing")
+    if not summary or rep is None:
+        empty_note(container, "정밀 풋팅 결과가 없습니다 (보고서종류 '감사'에서 수행).")
+        return
+    from .rules.audit_footing import exceptions
+    section_title(container, "정밀 풋팅 요약 (재무제표 본문 / 재무제표간 / 주석 표 / 재무제표↔주석 / 본문 서술금액 / 특수검증)")
+    tot = sum(a["total"] for a in summary)
+    bad = sum(a["mismatch"] for a in summary)
+    other = sum(a["rounding"] + a["other"] for a in summary)
+    row = ctk.CTkFrame(container, fg_color="transparent")
+    row.pack(fill="x", padx=4, pady=(0, 6))
+    badge(row, f"검증 {tot:,}건", theme.ACCENT_SKY).pack(side="left", padx=4)
+    badge(row, f"불일치 {bad}건", theme.ACCENT_CORAL if bad else theme.ACCENT_MINT).pack(side="left", padx=4)
+    badge(row, f"단수차이·확인필요 {other}건", theme.ACCENT_PEACH).pack(side="left", padx=4)
+    _simple_table(container, ["검증영역", "건수", "일치", "단수차이", "불일치", "기타"],
+                  [[a["area"], a["total"], a["ok"], a["rounding"], a["mismatch"], a["other"]] for a in summary])
+    for e in data.get("footing_errors") or []:
+        empty_note(container, f"[엔진 오류] {e}")
+    ex = exceptions(rep)
+    section_title(container, f"예외 목록 {len(ex)}건 (불일치·단수차이·부호/표기 확인·미발견)")
+    if not ex:
+        empty_note(container, "예외 없음 - 모든 검증 항목이 일치합니다.")
+        return
+    _simple_table(container, ["결과", "영역", "주석/재무제표", "p.", "항목", "보고", "비교"],
+                  [[e[7], e[0], e[1], e[2], e[3], _fmt(e[5]) if isinstance(e[5], (int, float)) else "-",
+                    _fmt(e[6]) if isinstance(e[6], (int, float)) else "-"] for e in ex[:80]], highlight_col=0)
+    if len(ex) > 80:
+        empty_note(container, f"외 {len(ex) - 80}건 - 자동 저장 Excel의 '풋팅예외' 시트에서 전체 확인")

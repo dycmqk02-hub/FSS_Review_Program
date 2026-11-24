@@ -252,6 +252,24 @@ def _render_reference(ref_matches: dict, ref_sources: list) -> str:
     return "\n".join(lines)
 
 
+def _render_footing_summary(title: str, data: dict) -> str:
+    out = [title, f"  {'검증영역':<18}{'건수':>6}{'일치':>6}{'단수차이':>8}{'불일치':>6}{'기타':>6}"]
+    for a in data["footing_summary"]:
+        out.append(f"  {a['area']:<18}{a['total']:>6}{a['ok']:>6}{a['rounding']:>8}{a['mismatch']:>6}{a['other']:>6}")
+    for e in data.get("footing_errors") or []:
+        out.append(f"  [오류] {e}")
+    rep = data.get("footing")
+    if rep is not None:
+        from .rules.audit_footing import exceptions
+        ex = exceptions(rep)
+        if ex:
+            out.append(f"  예외 {len(ex)}건 (상위 40건, 전체는 Excel '풋팅예외' 시트):")
+            for e in ex[:40]:
+                amt = f" {e[5]:,.0f} vs {e[6]:,.0f}" if isinstance(e[5], (int, float)) and isinstance(e[6], (int, float)) else ""
+                out.append(f"   - [{e[7]}] {e[0]} {e[1]} p.{e[2]} {e[3]} :: {str(e[4])[:70]}{amt}")
+    return "\n".join(out)
+
+
 def render_text_report(result: dict) -> str:
     lines = []
     lines.append("=" * 78)
@@ -271,6 +289,11 @@ def render_text_report(result: dict) -> str:
         return "\n".join(lines)
 
     sections = result["sections"]
+    doc_word = "감사보고서" if result.get("report_type") == "감사" else "검토보고서"
+    for key, lbl in (("single", result["fs_type"]), ("consol", "연결"), ("separate", "별도")):
+        if key in sections and sections[key].get("footing_summary"):
+            lines.append("")
+            lines.append(_render_footing_summary(f"[{lbl} {doc_word} 정밀 풋팅 요약]", sections[key]))
     if "single" in sections:
         lines.append("")
         lines.append(_render_single(f"[{result['fs_type']} {result['report_type']}보고서]", sections["single"]))
@@ -280,9 +303,9 @@ def render_text_report(result: dict) -> str:
         lines.append(_render_reference(sections.get("reference_matches", {}), result.get("ref_sources", [])))
     else:
         lines.append("")
-        lines.append(_render_single("[연결재무제표 검토보고서]", sections["consol"]))
+        lines.append(_render_single(f"[연결재무제표 {doc_word}]", sections["consol"]))
         lines.append("")
-        lines.append(_render_single("[별도재무제표 검토보고서]", sections["separate"]))
+        lines.append(_render_single(f"[별도재무제표 {doc_word}]", sections["separate"]))
         lines.append("")
         lines.append(_render_consol_vs_sep(sections["consol_vs_sep"]))
         lines.append("")

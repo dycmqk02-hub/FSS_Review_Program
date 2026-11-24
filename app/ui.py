@@ -146,7 +146,7 @@ class App(ctk.CTk):
         )
         opt1.pack(fill="x", padx=22, pady=(0, 4))
         self.audit_hint = ctk.CTkLabel(
-            s, text="※ 감사보고서 리뷰는 추후 지원 예정입니다 (현재는 페이지 수만 확인).",
+            s, text="※ 감사보고서: 감사기준서 700/701/570 체크리스트·감사의견 판단 + 재무제표/주석 정밀 풋팅 결과가 '풋팅검증' 탭과 자동저장 Excel에 표시됩니다.",
             font=theme.FONT_SMALL, text_color=theme.ACCENT_PEACH_DARK, anchor="w", justify="left",
             wraplength=252,
         )
@@ -387,7 +387,7 @@ class App(ctk.CTk):
                                               command=self._export_excel)
         self.export_xlsx_btn.pack(side="right", padx=(6, 0))
 
-        self.tab_names = ["요약", "체크리스트", "숫자 스크리닝", "증감분석", "합계검증", "공시사항점검",
+        self.tab_names = ["요약", "풋팅검증", "체크리스트", "숫자 스크리닝", "증감분석", "합계검증", "공시사항점검",
                           "회계처리 변경", "참조자료", "연결 vs 별도"]
 
         self.tab_bar = rh.WrappingTabBar(self.main_area, self.tab_names + ["AI 심층분석"],
@@ -809,6 +809,17 @@ class App(ctk.CTk):
             self._render_summary_doc(summary, "별도", sections["separate"])
         else:
             self._render_summary_doc(summary, result["fs_type"], sections["single"])
+        self.update_idletasks()
+
+        # 풋팅검증 탭 (감사보고서 정밀 풋팅)
+        foot_tab = self.scroll_frames["풋팅검증"]
+        if is_dual:
+            rh.doc_label_title(foot_tab, "연결재무제표")
+            rh.render_footing(foot_tab, sections["consol"])
+            rh.doc_label_title(foot_tab, "별도재무제표")
+            rh.render_footing(foot_tab, sections["separate"])
+        else:
+            rh.render_footing(foot_tab, sections["single"])
         self.update_idletasks()
 
         # 체크리스트 탭

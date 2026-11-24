@@ -72,6 +72,21 @@ def _add_variance_sheets(wb, result: dict) -> None:
             _write_sheet(wb, sheet_name, doc_label, stmt, stmt_data, unit, pm)
 
 
+def _add_footing_sheets(wb, result: dict) -> None:
+    """감사보고서 정밀 풋팅 결과(풋팅요약/풋팅예외/FS풋팅/FS간대사/주석풋팅/FS-주석대사/본문수치대사/
+    특수검증/추출표목록) 시트 추가. 연결 vs 별도면 '연결_'/'별도_' 접두어 + 계정별 금액비교 시트."""
+    from .rules import audit_footing as af
+    sections = result.get("sections", {})
+    docs = [(k, lbl) for k, lbl in (("single", result.get("fs_type", "")), ("consol", "연결"), ("separate", "별도"))
+            if k in sections and sections[k].get("footing") is not None]
+    for key, lbl in docs:
+        prefix = f"{lbl}_" if len(docs) > 1 else ""
+        af.add_excel_sheets(wb, lbl, sections[key]["footing"], prefix=prefix)
+    amt = (sections.get("consol_vs_sep") or {}).get("amount_comparison")
+    if amt:
+        af.add_consol_sep_sheet(wb, amt)
+
+
 def export_full_excel(result: dict, path: str) -> None:
     """리뷰 결과 전체(체크리스트/증감분석/합계검증 등)를 하나의 Excel로 저장."""
     import openpyxl
@@ -85,12 +100,18 @@ def export_full_excel(result: dict, path: str) -> None:
     ws.column_dimensions["A"].width = 120
 
     for line in render_text_report(result).splitlines():
+        # '='로 시작하는 구분선이 수식으로 저장되어 #VALUE! 가 나던 문제 수정 - 문자열로 강제
         ws.append([line])
+        if line.startswith("="):
+            cell = ws.cell(row=ws.max_row, column=1)
+            cell.value = line
+            cell.data_type = "s"
         stripped = line.strip()
         if stripped.startswith("=") or (stripped.startswith("[") and stripped.endswith("]")):
             ws.cell(row=ws.max_row, column=1).font = Font(bold=True)
 
     if not result.get("not_supported"):
+        _add_footing_sheets(wb, result)
         _add_variance_sheets(wb, result)
 
     excel_data = result.get("excel_verify_data")
