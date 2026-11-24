@@ -96,6 +96,18 @@ def export_full_excel(result: dict, path: str) -> None:
 
     wb = openpyxl.Workbook()
     ws = wb.active
+    if result.get("report_type") == "감사" and not result.get("not_supported"):
+        # 감사보고서: 요약 시트는 '개요'(감사의견·KAM·강조사항·내부회계 등 전기 대비 당기)만 남긴다
+        _add_audit_overview(wb, result)
+        wb.remove(ws)
+        _add_footing_sheets(wb, result)
+        _add_variance_sheets(wb, result)
+        _add_tail_sheets(wb, result)
+        if "개요" in wb.sheetnames:
+            wb.move_sheet("개요", offset=-wb.sheetnames.index("개요"))
+        wb.active = 0
+        wb.save(path)
+        return
     ws.title = "요약"
     ws.column_dimensions["A"].width = 120
 
@@ -114,6 +126,26 @@ def export_full_excel(result: dict, path: str) -> None:
         _add_footing_sheets(wb, result)
         _add_variance_sheets(wb, result)
 
+    _add_tail_sheets(wb, result)
+    wb.save(path)
+
+
+def _add_audit_overview(wb, result: dict) -> None:
+    from .rules import audit_footing as af
+    sections = result.get("sections", {})
+    docs = []
+    for key, lbl in (("single", result.get("fs_type", "")), ("consol", "연결"), ("separate", "별도")):
+        d = sections.get(key)
+        if not d or not d.get("overview"):
+            continue
+        prior = d.get("prior") or {}
+        docs.append((lbl, d["overview"], prior.get("overview"), prior.get("file")))
+        if prior.get("fs_compare"):
+            af.add_prior_sheet(wb, f"{lbl}_전기보고서대사" if key != "single" else "전기보고서대사", prior["fs_compare"])
+    af.add_overview_sheet(wb, docs)
+
+
+def _add_tail_sheets(wb, result: dict) -> None:
     excel_data = result.get("excel_verify_data")
     if excel_data:
         from .rules import excel_review_engine as xlengine
@@ -127,5 +159,3 @@ def export_full_excel(result: dict, path: str) -> None:
         ai_ws.column_dimensions["A"].width = 120
         for line in text.splitlines():
             ai_ws.append([line])
-
-    wb.save(path)

@@ -647,3 +647,24 @@ def render_footing(container, data):
                     _fmt(e[6]) if isinstance(e[6], (int, float)) else "-"] for e in ex[:80]], highlight_col=0)
     if len(ex) > 80:
         empty_note(container, f"외 {len(ex) - 80}건 - 자동 저장 Excel의 '풋팅예외' 시트에서 전체 확인")
+
+
+def render_overview(container, label, data):
+    """감사보고서 개요 - 전기 대비 당기 (변동 항목 강조)."""
+    from .rules.audit_footing import NO_CHANGE_FLAG
+    section_title(container, f"[{label}] 감사보고서 개요 - 전기 대비 당기")
+    prior = (data.get("prior") or {}).get("overview")
+    pmap = {i["key"]: i["value"] for i in (prior or [])}
+    rows, flags = [], []
+    for it in data["overview"]:
+        pv = pmap.get(it["key"]) if prior else it.get("prior_in_report")
+        chg = ""
+        if pv is not None and it["key"] not in NO_CHANGE_FLAG:
+            chg = "변동" if str(pv).strip() != str(it["value"]).strip() else "동일"
+        rows.append([it["label"], pv if pv is not None else ("-" if prior else "전기 보고서 미제공"), it["value"], chg])
+    _simple_table(container, ["항목", "전기", "당기", "전기 대비"], rows, highlight_col=None)
+    n = sum(1 for r in rows if r[3] == "변동")
+    if prior is None:
+        empty_note(container, "전기 감사보고서 PDF(선택)를 올리면 전기 대비 변동이 표시됩니다.")
+    elif n:
+        badge(container, f"전기 대비 변동 {n}건", theme.ACCENT_PEACH).pack(anchor="w", padx=4, pady=(2, 6))

@@ -10,7 +10,7 @@
 """
 from . import pdf_utils
 from .rules.audit_checklist import evaluate_audit_checklist
-from .rules.audit_opinion import detect_audit_opinion
+from .rules.audit_opinion import detect_audit_opinion, build_overview
 from .rules.comparative_check import check_comparative
 from .rules.accounting_change import detect_accounting_changes
 from .rules.sum_check import check_table_sums
@@ -37,8 +37,22 @@ def _footing(path: str, label: str):
         return rep
 
 
+def _prior_review(prior_path: str | None, rep, label: str) -> dict | None:
+    """전기 감사보고서 PDF(선택): 개요 비교 + 당기보고서 전기열 ↔ 전기보고서 당기열 대사."""
+    if not prior_path:
+        return None
+    import os
+    try:
+        pdoc = pdf_utils.load_pdf(prior_path, extract_tables=False)
+        prep = _footing(prior_path, f"{label}(전기)")
+        return {"file": os.path.basename(prior_path), "overview": build_overview(pdoc.full_text, prep),
+                "fs_compare": af.compare_prior_fs(rep, prep), "footing": prep}
+    except Exception as e:  # noqa: BLE001
+        return {"file": os.path.basename(prior_path), "overview": None, "fs_compare": [], "error": str(e)}
+
+
 def _single_doc_review(path: str, label: str, custom_items, pm_threshold, xbrl_source, xbrl_kind,
-                        excel_data, accounting_standard, settings, report=None) -> dict:
+                        excel_data, accounting_standard, settings, report=None, prior_path: str | None = None) -> dict:
     doc = pdf_utils.load_pdf(path)
     if report:
         report(f"{label} 정밀 풋팅(재무제표·주석 표 좌표 분석) 중...", None)
@@ -69,6 +83,8 @@ def _single_doc_review(path: str, label: str, custom_items, pm_threshold, xbrl_s
         legacy_sum = []
 
     return {
+        "overview": build_overview(doc.full_text, rep),
+        "prior": _prior_review(prior_path, rep, label),
         "checklist": evaluate_audit_checklist(doc.full_text, custom_items),
         "opinion": detect_audit_opinion(doc.full_text),
         "comparative": check_comparative(doc.full_text),
@@ -116,11 +132,12 @@ def run_review(fs_type: str, accounting_standard: str, files: dict, settings: di
     if fs_type == "연결 vs 별도":
         report("연결 감사보고서 분석/풋팅 중...", 5)
         result["sections"]["consol"] = _single_doc_review(files["consol"], "연결", custom_items, pm_consol, xbrl_source,
-                                                           "consolidated", excel_data, accounting_standard, settings)
+                                                           "consolidated", excel_data, accounting_standard, settings,
+                                                           prior_path=files.get("prior_consol"))
         report("별도 감사보고서 분석/풋팅 중...", 40)
         result["sections"]["separate"] = _single_doc_review(files["separate"], "별도", custom_items, pm_separate,
                                                              xbrl_source, "separate", excel_data, accounting_standard,
-                                                             settings)
+                                                             settings, prior_path=files.get("prior_separate"))
         report("연결 vs 별도 비교 중...", 75)
         cdoc = pdf_utils.load_pdf(files["consol"], extract_tables=False)
         sdoc = pdf_utils.load_pdf(files["separate"], extract_tables=False)
@@ -134,7 +151,8 @@ def run_review(fs_type: str, accounting_standard: str, files: dict, settings: di
         pm = se._resolve_pm(fs_type, pm_consol, pm_separate)
         result["sections"]["single"] = _single_doc_review(files["main"], fs_type, custom_items, pm, xbrl_source,
                                                           se.FS_TYPE_TO_XBRL_KIND.get(fs_type), excel_data,
-                                                          accounting_standard, settings)
+                                                          accounting_standard, settings,
+                                                          prior_path=files.get("prior_main"))
         docs = [result["sections"]["single"]]
 
     kw_set = {f["keyword"] for d in docs for f in d["accounting_changes"]}

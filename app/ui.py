@@ -82,6 +82,9 @@ class App(ctk.CTk):
         self.main_pdf_path = None
         self.consol_pdf_path = None
         self.separate_pdf_path = None
+        self.prior_main_pdf_path = None
+        self.prior_consol_pdf_path = None
+        self.prior_separate_pdf_path = None
         self.xbrl_source_path = None
         self.xbrl_verify_var = ctk.BooleanVar(value=True)
         self.excel_review_path = None
@@ -437,6 +440,13 @@ class App(ctk.CTk):
         else:
             label = f"{self.fs_type.get()}재무제표 {doc_word} PDF"
             self._file_row(self.file_section, label, "main")
+        if self.report_type.get() == "감사":
+            # 선택: 전기 감사보고서 - 개요(의견·KAM·강조사항·내부회계) 전기 대비 비교 + 당기 전기열 ↔ 전기 당기열 대사
+            if self.fs_type.get() == "연결 vs 별도":
+                self._file_row(self.file_section, "(선택) 전기 연결 감사보고서 PDF", "prior_consol")
+                self._file_row(self.file_section, "(선택) 전기 별도 감사보고서 PDF", "prior_separate")
+            else:
+                self._file_row(self.file_section, f"(선택) 전기 {self.fs_type.get()} 감사보고서 PDF", "prior_main")
 
     def _file_row(self, parent, label, key):
         frame = ctk.CTkFrame(parent, fg_color="transparent")
@@ -600,6 +610,10 @@ class App(ctk.CTk):
                 return
             files = {"main": self.main_pdf_path}
             ai_pdf_paths = [self.main_pdf_path]
+        if report_type == "감사":
+            for k in ("prior_main", "prior_consol", "prior_separate"):
+                if getattr(self, f"{k}_pdf_path", None):
+                    files[k] = getattr(self, f"{k}_pdf_path")
 
         ai_providers = []
         if self.use_claude_var.get():
@@ -727,6 +741,9 @@ class App(ctk.CTk):
         self.main_pdf_path = None
         self.consol_pdf_path = None
         self.separate_pdf_path = None
+        self.prior_main_pdf_path = None
+        self.prior_consol_pdf_path = None
+        self.prior_separate_pdf_path = None
         self.xbrl_source_path = None
         self.xbrl_verify_var.set(True)
         self.excel_review_path = None
@@ -810,6 +827,12 @@ class App(ctk.CTk):
         else:
             self._render_summary_doc(summary, result["fs_type"], sections["single"])
         self.update_idletasks()
+
+        # 요약 탭 - 감사보고서 개요(전기 대비 당기)
+        if result.get("report_type") == "감사":
+            for key, lbl in (("single", result["fs_type"]), ("consol", "연결"), ("separate", "별도")):
+                if key in sections and sections[key].get("overview"):
+                    rh.render_overview(summary, lbl, sections[key])
 
         # 풋팅검증 탭 (감사보고서 정밀 풋팅)
         foot_tab = self.scroll_frames["풋팅검증"]
