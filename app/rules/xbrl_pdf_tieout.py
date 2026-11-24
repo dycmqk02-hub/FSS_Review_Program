@@ -18,6 +18,15 @@ from .xbrl_facts import parse_contexts, parse_facts, CONSOLIDATED_MEMBER, SEPARA
 ROMAN = re.compile(r'^(I|II|III|IV|V|VI|VII|VIII|IX|X|XI|XII)\.\s*')
 STMTS = (('BS', '재무상태표'), ('IS', '손익계산서'), ('CF', '현금흐름표'))
 
+# 현금흐름표 지출(유출) 요소: XBRL은 지출액을 양수로 태깅하고 PDF는 (괄호) 음수로 표시하는 것이 관행.
+# 이 요소들은 XBRL 값의 부호를 바꿔 PDF와 같은 기준으로 비교한다 (IncomeTaxesPaidRefund 도 '납부=양수' 정의).
+OUTFLOW_RE = re.compile(r'(Payments?(Of|For|To)|PurchaseOf|RepaymentsOf|InterestPaid|IncomeTaxesPaid|DividendsPaid|'
+                        r'CashAdvancesAndLoansMadeTo|AcquisitionOf)')
+
+
+def sign_convention(code: str, name: str) -> int:
+    return -1 if code == 'CF' and OUTFLOW_RE.search(name or '') else 1
+
 
 def _key(label: str) -> str:
     s = ROMAN.sub('', label or '')
@@ -100,7 +109,10 @@ def tieout(rep, source_path: str, kind: str) -> dict:
             cand = by_key.get(k, [])
 
             def vmatch(e):
+                sg = sign_convention(code, e['name'])
                 c, p = e['by_date'].get(d_cur), e['by_date'].get(d_pri)
+                c = c * sg if c is not None else None
+                p = p * sg if p is not None else None
                 if c is None or abs(abs(c) - abs(r['cy'])) >= 0.5:
                     return False
                 return (p is not None and abs(abs(p) - abs(r['py'])) < 0.5) or (p is None and r['py'] == 0)
@@ -117,10 +129,12 @@ def tieout(rep, source_path: str, kind: str) -> dict:
             if hit is None:
                 hit = next((e for e in cand if e['by_date'].get(d_cur) is not None), None)
                 how = '라벨' if hit is not None else ''
+            sg = sign_convention(code, hit['name']) if hit else 1
             for per, dt, pv in (('당기', d_cur, r['cy']), ('전기', d_pri, r['py'])):
-                xv = hit['by_date'].get(dt) if hit else None
-                if hit is not None and xv is None and pv == 0:
-                    xv = 0.0
+                raw = hit['by_date'].get(dt) if hit else None
+                if hit is not None and raw is None and pv == 0:
+                    raw = 0.0
+                xv = raw * sg if raw is not None else None
                 if hit is None:
                     res = 'XBRL 미발견'
                 elif xv is None:
@@ -133,13 +147,17 @@ def tieout(rep, source_path: str, kind: str) -> dict:
                     res = '일치(부호표시 차이)'
                 else:
                     res = '불일치'
-                rows.append({'stmt': stmt, 'label': r['label'], 'period': per, 'pdf': pv, 'xbrl': xv,
-                             'xbrl_label': f"{hit['label']} ({hit['name']})" if hit else '', 'result': res})
+                note = ''
+                if hit is not None and sg == -1 and raw not in (None, 0):
+                    note = f'지출항목 - XBRL 원값 {raw:,.0f}(지출=양수 태깅) 부호 변환 후 비교'
+                rows.append({'stmt': stmt, 'label': r['label'], 'period': per, 'pdf': pv, 'xbrl': xv, 'xbrl_raw': raw,
+                             'xbrl_label': f"{hit['label']} ({hit['name']})" if hit else '', 'result': res, 'note': note})
             if hit:
                 used.add((code, hit['name']))
         for e in elems:
             if (code, e['name']) not in used and e['by_date'].get(d_cur) not in (None, 0.0):
                 rows.append({'stmt': stmt, 'label': '-', 'period': '당기', 'pdf': None, 'xbrl': e['by_date'].get(d_cur),
+                             'xbrl_raw': e['by_date'].get(d_cur), 'note': '',
                              'xbrl_label': f"{e['label']} ({e['name']})",
                              'result': 'PDF 본문에 없음(XBRL 세부태깅 - 참고)'})
     cont = []
@@ -165,23 +183,24 @@ def add_tieout_sheet(wb, name: str, data: dict) -> None:
     from openpyxl.styles import Font, PatternFill
     from openpyxl.formatting.rule import CellIsRule, FormulaRule
     ws = wb.create_sheet(name[:31])
-    ws.append(['재무제표', 'PDF 계정과목', '기간', 'PDF 금액', 'XBRL 금액', '차이', 'XBRL 요소(라벨)', '결과'])
+    ws.append(['재무제표', 'PDF 계정과목', '기간', 'PDF 금액', 'XBRL 금액(PDF 부호기준)', '차이', 'XBRL 요소(라벨)', '결과',
+               'XBRL 원값', '비고'])
     for c in ws[1]:
         c.font = Font(name='Arial', bold=True, color='FFFFFF'); c.fill = PatternFill('solid', start_color='1F3864')
     rows = data.get('rows', [])
     for r in data.get('continuity', []):
         rows = [{'stmt': '연속성', 'label': r['item'], 'period': '전기초', 'pdf': r['pdf'], 'xbrl': r['xbrl'],
-                 'xbrl_label': '', 'result': r['result']}] + rows
+                 'xbrl_label': '', 'result': r['result'], 'xbrl_raw': r['xbrl'], 'note': ''}] + rows
     if data.get('error'):
         ws.append([f"XBRL 대사 불가: {data['error']}"])
     for i, r in enumerate(rows, start=2):
         ws.append([r['stmt'], r['label'], r['period'], r['pdf'], r['xbrl'], f'=IF(OR(D{i}="",E{i}=""),"",D{i}-E{i})',
-                   r['xbrl_label'], r['result']])
-        for j in (4, 5, 6):
+                   r['xbrl_label'], r['result'], r.get('xbrl_raw'), r.get('note', '')])
+        for j in (4, 5, 6, 9):
             ws.cell(i, j).number_format = '#,##0;(#,##0);-'
         for c in ws[i]:
             c.font = Font(name='Arial', size=9)
-    for col, w in zip('ABCDEFGH', (12, 40, 7, 18, 18, 14, 56, 30)):
+    for col, w in zip('ABCDEFGHIJ', (12, 40, 7, 18, 20, 14, 56, 22, 18, 44)):
         ws.column_dimensions[col].width = w
     ws.freeze_panes = 'A2'
     ws.auto_filter.ref = ws.dimensions
