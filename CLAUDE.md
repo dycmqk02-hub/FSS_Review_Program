@@ -13,6 +13,8 @@ DART에서 받은 보고서 PDF를 올리면 재무제표·주석 숫자 풋팅,
 ## 실행
 - Windows: `run.bat` 더블클릭 (최초 .venv 생성 + 패키지 설치). EXE: `build_exe.bat` → `dist\FSS_ReviewProgram.exe`
 - 직접: `pip install -r requirements.txt` → `python main.py` (Python 3.10+, tkinter 필요)
+- **`.bat` 파일은 ASCII(영어)만 + CRLF로 저장**할 것. UTF-8 한글/LF면 cmd가 명령을 조각내 실행함
+  (`.gitattributes`의 `*.bat -text`로 CRLF 그대로 보관). pip 업그레이드는 `python -m pip`로, 실패해도 계속 진행.
 - `dist\FSS_ReviewProgram.exe`는 **구버전 빌드** - 기능 반영하려면 재빌드 필요.
 
 ## 회귀 테스트 (코드 수정 후 반드시 실행)

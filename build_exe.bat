@@ -1,27 +1,58 @@
 @echo off
-chcp 65001 >nul
-REM 보고서 Review 프로그램 - PyInstaller EXE 빌드 스크립트 (dist\FSS_ReviewProgram.exe 생성)
-setlocal
-
+REM ============================================================
+REM  FSS Review Program - PyInstaller EXE build script
+REM  Output: dist\FSS_ReviewProgram.exe
+REM
+REM  NOTE: keep this file ASCII-only with CRLF line endings.
+REM ============================================================
+setlocal EnableExtensions
 cd /d "%~dp0"
+set "PYTHONUTF8=1"
+set "PYTHONIOENCODING=utf-8"
+set "PIP_DISABLE_PIP_VERSION_CHECK=1"
+set "VENV_PY=.venv\Scripts\python.exe"
 
-if not exist ".venv" (
-    echo [1/4] 가상환경 생성 중...
-    python -m venv .venv
+REM ---- Find Python 3.10+ (py launcher first, then python) ----
+set "PY="
+py -3 -c "import sys; sys.exit(0 if sys.version_info >= (3, 10) else 1)" >nul 2>nul
+if not errorlevel 1 set "PY=py -3"
+if defined PY goto have_python
+python -c "import sys; sys.exit(0 if sys.version_info >= (3, 10) else 1)" >nul 2>nul
+if not errorlevel 1 set "PY=python"
+if defined PY goto have_python
+echo [ERROR] Python 3.10 or newer was not found.
+goto fail
+
+:have_python
+if exist "%VENV_PY%" (
+    "%VENV_PY%" -m pip --version >nul 2>nul
+    if errorlevel 1 (
+        echo Existing .venv is broken. Recreating it...
+        rmdir /s /q .venv
+    )
+)
+if not exist "%VENV_PY%" (
+    echo [1/4] Creating virtual environment...
+    %PY% -m venv .venv
+    if errorlevel 1 goto fail
 )
 
-echo [2/4] 패키지 설치 중...
-call .venv\Scripts\activate.bat
-pip install --upgrade pip >nul
-pip install -r requirements.txt
+echo [2/4] Installing packages...
+"%VENV_PY%" -m pip install --upgrade pip
+if errorlevel 1 echo [WARN] pip upgrade failed - continuing with the current pip.
+"%VENV_PY%" -m pip install -r requirements.txt
+if errorlevel 1 (
+    echo [ERROR] Package installation failed.
+    goto fail
+)
 
-echo [3/4] 이전 빌드 정리 중...
-rmdir /s /q build 2>nul
-rmdir /s /q dist 2>nul
-del /q FSS_ReviewProgram.spec 2>nul
+echo [3/4] Cleaning previous build...
+if exist build rmdir /s /q build
+if exist dist rmdir /s /q dist
+if exist FSS_ReviewProgram.spec del /q FSS_ReviewProgram.spec
 
-echo [4/4] PyInstaller 빌드 중...
-pyinstaller --noconfirm --onefile --windowed ^
+echo [4/4] Building with PyInstaller...
+"%VENV_PY%" -m PyInstaller --noconfirm --onefile --windowed ^
     --name FSS_ReviewProgram ^
     --collect-all customtkinter ^
     --collect-all pdfplumber ^
@@ -30,12 +61,18 @@ pyinstaller --noconfirm --onefile --windowed ^
     main.py
 if errorlevel 1 (
     echo.
-    echo 빌드 실패 - 위 오류 메시지를 확인하세요.
-    pause
-    exit /b 1
+    echo [ERROR] Build failed - check the messages above.
+    goto fail
 )
 
-
 echo.
-echo 빌드 완료: dist\FSS_ReviewProgram.exe
+echo Build complete: dist\FSS_ReviewProgram.exe
 pause
+endlocal
+exit /b 0
+
+:fail
+echo.
+pause
+endlocal
+exit /b 1

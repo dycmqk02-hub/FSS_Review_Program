@@ -20,6 +20,15 @@
 3. (선택) 다른 PC에 배포할 EXE가 필요하면 `build_exe.bat` 실행 → `dist\FSS_ReviewProgram.exe`
    - 저장소의 기존 `dist\FSS_ReviewProgram.exe`는 **이전 버전 빌드**이므로 다시 빌드해야 최신 기능이 들어갑니다.
 
+**run.bat 실행 시 문제 해결**
+- `'댁쓽'은(는) 내부 또는 외부 명령...`처럼 깨진 글자 오류가 나면: 예전 run.bat입니다. 최신 파일을 다시 받으세요
+  (배치 파일은 영어·CRLF로만 저장되어 있어야 cmd가 제대로 읽습니다).
+- 이전에 설치가 중간에 실패했다면 이 폴더의 `.venv` 폴더를 지우고 run.bat을 다시 실행하세요(손상된 .venv는 자동 재생성도 시도합니다).
+- `Python 3.10 or newer was not found`: Python 설치 시 "Add python.exe to PATH"를 체크했는지 확인하고,
+  Windows 설정 > 앱 실행 별칭에서 python.exe(Microsoft Store) 별칭을 끄세요.
+- `tkinter is missing`: Python 설치 프로그램 > Modify에서 "tcl/tk and IDLE"을 켜세요.
+- 회사망에서 패키지 설치가 실패하면 프록시·방화벽 설정을 확인하세요.
+
 명령줄로 실행하려면: `python -m venv .venv` → `.venv\Scripts\activate` → `pip install -r requirements.txt` → `python main.py`
 
 **파일 처리 위치**: 업로드한 PDF(당기·전기)와 XBRL ZIP은 **이 PC 안에서 프로그램이 직접 읽고** 결과 Excel을
