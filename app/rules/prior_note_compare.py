@@ -78,7 +78,8 @@ def _cells(rep, want: str) -> dict:
         for nm in t['colnames']:
             n = (nm or '').replace(' ', '')
             colp.append('전기' if '전기' in n else ('당기' if '당기' in n else None))
-            colk.append(PERIOD_WORDS.sub('', n) or '금액')
+            n2 = re.sub(r'^(구분|과목|항목|내역|계정)', '', PERIOD_WORDS.sub('', n))
+            colk.append(n2 or '금액')
         row_period, section, seen = None, '', {}
         for r in t['rows']:
             if not r['nums']:
@@ -122,13 +123,50 @@ def compare_note_numbers(cur, prior, note_pairs: list) -> list:
         if best is not None and _sim(k[1], best) >= 0.7:
             tmap[(k[0], k[1])] = best
     c_cells = {(k[0], tmap.get((k[0], k[1]), k[1])) + k[2:]: v for k, v in c_cells.items()}
+    # 같은 (표, 구분, 행, 열)이 여러 번 나오는 경우(같은 이름의 차입처 등) 순번 대신 금액이 같은 칸끼리 먼저 짝짓기
+    def regroup(cells):
+        g = {}
+        for k, v in cells.items():
+            g.setdefault(k[:-1], []).append((k, v))
+        return g
+    cg, pg_ = regroup(c_cells), regroup(p_cells)
+    pairs = {}
+    for base, citems in cg.items():
+        pitems = list(pg_.get(base, []))
+        if len(citems) == 1 and len(pitems) == 1:
+            pairs[citems[0][0]] = pitems[0][0]; continue
+        free = list(pitems)
+        rest = []
+        for ck, (cv, ci) in citems:
+            hit = next((pk for pk, (pv, pi) in free if abs(pv - cv) < 0.5), None)
+            if hit is not None:
+                pairs[ck] = hit; free = [x for x in free if x[0] != hit]
+            else:
+                rest.append(ck)
+        if len(rest) == 1 and len(free) == 1 and len(citems) == 1:
+            pairs[rest[0]] = free[0][0]   # 동일 이름 행이 여럿이면 금액이 다른 나머지는 순서로 억지로 짝짓지 않음(오탐 방지)
+    # 2차: 표 제목이 달라 못 찾은 칸 → 같은 주석 안에서 (구분, 행, 열, 순번)이 양쪽 모두 유일하면 연결
+    pk_used = set(pairs.values())
+    def loose(k):
+        return (k[0],) + k[2:]
+    cl, pl = {}, {}
+    for k in c_cells:
+        if k not in pairs:
+            cl.setdefault(loose(k), []).append(k)
+    for k in p_cells:
+        if k not in pk_used:
+            pl.setdefault(loose(k), []).append(k)
+    for lk, cks in cl.items():
+        if len(cks) == 1 and len(pl.get(lk, [])) == 1:
+            pairs[cks[0]] = pl[lk][0]
     out, used = [], set()
     for k, (cv, ci) in c_cells.items():
-        pv = p_cells.get(k)
+        pk = pairs.get(k)
+        pv = p_cells.get(pk) if pk else None
         if pv is None:
             res, pval, pinfo = '전기보고서에 없음(신설·재분류·표 형식 변경 확인)', None, {}
         else:
-            used.add(k)
+            used.add(pk)
             pval, pinfo = pv
             tol = 1000 if ci['unit'] == '천원' or pinfo.get('unit') == '천원' else 1
             d = abs(cv - pval)
@@ -144,6 +182,28 @@ def compare_note_numbers(cur, prior, note_pairs: list) -> list:
                         'unit': pi['unit'], 'cur_prior': None, 'prior_cur': pi['raw'], 'cur_page': None,
                         'prior_page': pi['page'], 'prior_note': pi['note'],
                         'result': '당기보고서에 없음(삭제·통합·표 형식 변경 확인)'})
+    # 후처리: 여러 줄 셀 때문에 '구분' 문맥이 해마다 달라 잘못 짝지어진 불일치 → 같은 표·행·열에서 같은 금액이 있으면 일치로 정정
+    by_loose = {}
+    for k, (pv, pi) in p_cells.items():
+        by_loose.setdefault((k[0], k[1], k[3], k[4]), []).append((k, pv))
+    unpaired_prior = {id(r): r for r in out if r['cur_prior'] is None}
+    ckey = {}
+    for k, (cv, ci) in c_cells.items():
+        ckey[(ci['note'], ci['table'], ci['row'], ci['col'], ci['raw'])] = k
+    for r in out:
+        if not r['result'].startswith('불일치'):
+            continue
+        k = ckey.get((r['note'], r['table'], r['row'], r['col'], r['cur_prior']))
+        if not k:
+            continue
+        scale = {'천원': 1000, '백만원': 1e6, '원': 1}.get(r['unit'], 1)
+        alt = [pv for pk, pv in by_loose.get((k[0], k[1], k[3], k[4]), []) if abs(pv - r['cur_prior'] * scale) < 0.5]
+        if alt:
+            r['result'] = '일치'
+            r['prior_cur'] = r['cur_prior']
+            for x in list(unpaired_prior.values()):
+                if x['row'] == r['row'] and x['col'] == r['col'] and x['prior_cur'] == r['cur_prior']:
+                    out.remove(x); unpaired_prior.pop(id(x)); break
     order = {'불일치(재작성·재분류 확인)': 0, '단수차이': 1}
     out.sort(key=lambda r: (order.get(r['result'], 3 if r['result'] == '일치' else 2), r['note'] or 999))
     return out
@@ -152,7 +212,8 @@ def compare_note_numbers(cur, prior, note_pairs: list) -> list:
 def summary(note_list: list, note_nums: list, fs_rows: list) -> dict:
     cnt = lambda lst, key, val: sum(1 for r in lst if r[key] == val)
     return {
-        'fs_total': len(fs_rows), 'fs_mismatch': sum(1 for r in fs_rows if r['result'].startswith('불일치')),
+        'fs_total': sum(1 for r in fs_rows if r['cur_prior_col'] is not None and r['prior_report_cy'] is not None),
+        'fs_mismatch': sum(1 for r in fs_rows if r['result'].startswith('불일치')),
         'notes_new': [f"{r['cur_no']}. {r['cur_title']}" for r in note_list if r['status'] == '당기 신설'],
         'notes_removed': [f"{r['prior_no']}. {r['prior_title']}" for r in note_list if r['status'] == '당기 삭제'],
         'notes_renamed': [f"{r['prior_title']} → {r['cur_title']}" for r in note_list if r['status'] == '제목변경'],

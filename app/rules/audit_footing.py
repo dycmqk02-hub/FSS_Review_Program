@@ -75,10 +75,12 @@ def extract(pdf_path):
 """
 
 FOOTER = '전자공시시스템'
+SCE_DATE = re.compile(r'(\d{4})(?:\.\d{2}\.\d{2}|년\s*\d{1,2}월\s*\d{1,2}일)')
+BS_GROUP_HEADERS = {'유동자산', '비유동자산', '유동부채', '비유동부채'}
 ROMAN = re.compile(r'^(I|II|III|IV|V|VI|VII|VIII|IX|X|XI|XII)\.\s*')
 NOTE_HEAD = re.compile(r'^(\d{1,2})\.\s*([가-힣A-Za-z(].*)$')
 SUB_HEAD = re.compile(r'^\((\d{1,2})\)\s*(.*)$')
-SUBSUB_HEAD = re.compile(r'^(\d{1,2})\)\s*(.*)$')
+SUBSUB_HEAD = re.compile(r'^(?:(\d{1,2})\)|[①-⑳]|[가-하]\.)\s*(.*)$')
 MARK = re.compile(r'\(\*\d*\)|\(\*\)|\*\d+')
 
 
@@ -155,24 +157,33 @@ class Report:
         cur = None
         rows = {'BS': [], 'IS': [], 'SCE': [], 'CF': []}
         sce_lines = []
+        note_x1 = None   # '주석' 머리글 오른쪽 끝 x - 이보다 충분히 오른쪽이면 금액, 근처면 주석번호
         for pg, l in self.lines(s['fs_start'], s['notes_start'] - 1):
             t = l['text'].replace(' ', '')
             if t.endswith('재무상태표'):
-                cur = 'BS'; continue
+                cur = 'BS'; note_x1 = None; continue
             if t.endswith('손익계산서'):
-                cur = 'IS'; continue
+                cur = 'IS'; note_x1 = None; continue
             if t.endswith('자본변동표'):
-                cur = 'SCE'; continue
+                cur = 'SCE'; note_x1 = None; continue
             if t.endswith('현금흐름표'):
-                cur = 'CF'; continue
+                cur = 'CF'; note_x1 = None; continue
+            if cur is not None and cur != 'SCE' and (t.startswith('과목') or t.startswith('과') ) and \
+                    any(tk['t'] == '주석' for tk in l['toks']):
+                note_x1 = next(tk['x1'] for tk in l['toks'] if tk['t'] == '주석')
+                continue
             if cur is None or t.startswith('"첨부된') or t.startswith('제4') or '(단위' in t:
                 continue
             if cur == 'SCE':
                 sce_lines.append((pg, l)); continue
             toks = l['toks']
-            vals = [tk for tk in toks if tk['x1'] > 330 and is_num_tok(tk['t'])]
-            label_toks = [tk for tk in toks if tk['x1'] <= 330 or not is_num_tok(tk['t'])]
-            notes = [tk['t'] for tk in label_toks if re.fullmatch(r'[\d,]+', tk['t']) and tk['x0'] > 150]
+            if note_x1 is not None:
+                is_val = lambda tk: tk['x1'] > note_x1 + 45 and is_num_tok(tk['t'])
+            else:   # 주석 열이 없는 표(현금흐름표 등): 왼쪽 라벨 영역의 '(1)', '1.' 같은 번호는 금액이 아님
+                is_val = lambda tk: tk['x0'] > 150 and is_num_tok(tk['t'])
+            vals = [tk for tk in toks if is_val(tk)]
+            label_toks = [tk for tk in toks if not is_val(tk)]
+            notes = [tk['t'] for tk in label_toks if re.fullmatch(r'[\d,]+', tk['t']) and tk['x0'] > 140]
             label = ' '.join(tk['t'] for tk in label_toks if tk['t'] not in notes).strip()
             if label.replace(' ', '').startswith('과목'):
                 continue
@@ -183,6 +194,24 @@ class Report:
             else:
                 cy = py = None
             rows[cur].append(dict(page=pg, label=label, n=norm(label), notes=','.join(notes), cy=cy, py=py))
+        # 여러 줄로 나뉜 계정명 합치기 (예: '당기손익 공정가치' / [주석·금액] / '측정 금융자산')
+        SECT = {'자산', '부채', '자본'}
+        for k, lst in rows.items():
+            out = []
+            for i, r in enumerate(lst):
+                if r.get('_drop'):
+                    continue
+                if r['cy'] is not None and not r['n']:
+                    if out and out[-1]['cy'] is None and out[-1]['n'] not in SECT:
+                        prev = out.pop()
+                        r['label'] = prev['label']
+                    if i + 1 < len(lst) and lst[i + 1]['cy'] is None and lst[i + 1]['n'] not in SECT and \
+                            len(lst[i + 1]['n']) <= 12 and not ROMAN.match(lst[i + 1]['label']):
+                        r['label'] = (r['label'] + ' ' + lst[i + 1]['label']).strip()
+                        lst[i + 1]['_drop'] = True
+                    r['n'] = norm(r['label'])
+                out.append(r)
+            rows[k] = out
         self.fs_rows = rows
         self.parse_sce(sce_lines)
 
@@ -206,7 +235,8 @@ class Report:
             if '총계' in n:
                 totals[n] = r
                 continue
-            if ROMAN.match(r['label']) or n.endswith('귀속되는자본'):
+            if ROMAN.match(r['label']) or n.endswith('귀속되는자본') or n in BS_GROUP_HEADERS or \
+                    (sec == '자본' and n.endswith('소유주지분')):
                 g = [r, []]; sec_groups.setdefault(sec, []).append(g)
             elif n == '비지배지분' or not sec_groups.get(sec):
                 sec_groups.setdefault(sec, []).append([None, [r]])
@@ -222,7 +252,7 @@ class Report:
                     calc = sum(d[per] for d in det)
                     self._add_fs(stmt, hdr['label'], f"{hdr['n']} = Σ하위 {len(det)}개 항목", per, hdr[per], calc, hdr['page'])
             # section total
-            tot_key = [k for k in totals if k.startswith(sec) and k.endswith('총계') and '과' not in k]
+            tot_key = [k for k in totals if k.startswith(sec) and k.endswith('총계') and not re.search(r'과|와|및', k)]
             if tot_key:
                 tr = totals[tot_key[0]]
                 sec_tot[sec] = tr
@@ -232,7 +262,7 @@ class Report:
                     for h, det in gs:
                         calc += h[per] if h is not None else sum(d[per] for d in det)
                     self._add_fs(stmt, tr['label'], f"{tr['n']} = Σ{sec} 구분합계", per, tr[per], calc, tr['page'])
-        tl = [v for k, v in totals.items() if '자본과부채' in k or '부채와자본' in k]
+        tl = [v for k, v in totals.items() if '자본과부채' in k or '부채와자본' in k or '부채및자본' in k]
         if tl and '부채' in sec_tot and '자본' in sec_tot:
             for per in ('cy', 'py'):
                 self._add_fs(stmt, tl[0]['label'], '자본과부채총계 = 부채총계 + 자본총계', per, tl[0][per],
@@ -261,6 +291,8 @@ class Report:
 
         chk('매출총이익', [('매출액', 1), ('매출원가', -1)], '매출총이익 = 매출액 - 매출원가')
         chk('영업이익', [('매출총이익', 1), ('판매비와관리비', -1)], '영업이익 = 매출총이익 - 판관비')
+        if get('매출총이익') is None and get('영업수익') is not None and get('영업비용') is not None:
+            chk('영업이익', [('영업수익', 1), ('영업비용', -1)], '영업이익 = 영업수익 - 영업비용')
         # 영업이익 ~ 차감전 사이 항목은 명칭으로 부호 결정
         idx_op = next((i for i, r in enumerate(rows) if '영업이익' in r['n']), None)
         idx_pt = next((i for i, r in enumerate(rows) if '차감전' in r['n']), None)
@@ -280,6 +312,10 @@ class Report:
         # 기타포괄손익
         i_oci = next((i for i, r in enumerate(rows) if '기타포괄손익' in r['n'] and ROMAN.match(r['label'])), None)
         i_tci = next((i for i, r in enumerate(rows) if '총포괄손익' in r['n'] and ROMAN.match(r['label'])), None)
+        if i_oci is None:   # 로마자 없는 서식
+            i_oci = next((i for i, r in enumerate(rows) if ROMAN.sub('', r['n']).startswith('기타포괄손익') and r['cy'] is not None), None)
+            i_tci = next((i for i, r in enumerate(rows) if re.sub(r'^(당기)?', '', r['n']).startswith('총포괄손익')
+                          and '귀속' not in r['n'] and r['cy'] is not None), None)
         if i_oci is not None and i_tci is not None:
             subs = [r for r in rows[i_oci + 1:i_tci] if r['cy'] is not None]
             if subs:
@@ -293,11 +329,13 @@ class Report:
         # 귀속
         for key, base in (('당기순이익(손실)의귀속', '당기순이익'), ('총포괄손익의귀속', '총포괄손익')):
             i = next((i for i, r in enumerate(rows) if key.replace('(손실)', '') in r['n'].replace('(손실)', '')), None)
+            if i is None and base == '당기순이익':
+                i = next((i for i, r in enumerate(rows) if r['n'] in ('당기손익의귀속', '당기순손익의귀속')), None)
             if i is None:
                 continue
             subs = []
             for r in rows[i + 1:]:
-                if ROMAN.match(r['label']):
+                if ROMAN.match(r['label']) or (r['cy'] is None and subs) or '주당' in r['n']:
                     break
                 if r['cy'] is not None:
                     subs.append(r)
@@ -307,19 +345,45 @@ class Report:
                     self._add_fs(stmt, rows[i]['label'], f'{base} = Σ귀속({len(subs)}개)', per, b[per],
                                  sum(r[per] for r in subs), rows[i]['page'])
 
+    @staticmethod
+    def _cf_level(label):
+        if ROMAN.match(label):
+            return 0
+        if re.match(r'^\d{1,2}\.\s*\S', label):
+            return 1
+        if re.match(r'^\(\d{1,2}\)\s*\S', label):
+            return 2
+        return 3
+
     def foot_cf(self):
+        """현금흐름표 계층 풋팅: I.(로마자) > 1. > (1) > 일반 항목. 각 머리행 = 바로 아래 단계 항목 합계.
+        '현금유출액' 아래 항목을 양수로 표시하는 서식은 부호 반전 시 일치하면 '일치(유출액 양수표시)'."""
         rows = self.fs_rows['CF']
         stmt = '현금흐름표'
-        romans = [(i, r) for i, r in enumerate(rows) if ROMAN.match(r['label'])]
+        lv = [self._cf_level(r['label']) for r in rows]
+        romans = [(i, r) for i, r in enumerate(rows) if lv[i] == 0]
         acts = {}
-        for k, (i, r) in enumerate(romans):
-            nxt = romans[k + 1][0] if k + 1 < len(romans) else len(rows)
-            det = [d for d in rows[i + 1:nxt] if d['cy'] is not None]
-            if det:
+        for i, r in enumerate(rows):
+            if r['cy'] is None or lv[i] == 3:
+                continue
+            j = i + 1
+            while j < len(rows) and lv[j] > lv[i]:
+                j += 1
+            rng = [(k, rows[k]) for k in range(i + 1, j) if rows[k]['cy'] is not None]
+            if not rng:
+                continue
+            m = min(lv[k] for k, _ in rng)
+            det = [d for k, d in rng if lv[k] == m]
+            if lv[i] == 0:
                 acts[r['n']] = r
-                for per in ('cy', 'py'):
-                    self._add_fs(stmt, r['label'], f"{r['n']} = Σ세부 {len(det)}개", per, r[per],
-                                 sum(d[per] for d in det), r['page'])
+            for per in ('cy', 'py'):
+                calc = sum(d[per] or 0 for d in det)
+                if abs((r[per] or 0) - calc) > 0.5 and abs((r[per] or 0) + calc) < 0.5 and r[per]:
+                    self.fs_checks.append(dict(구분=stmt, 항목=r['label'], 기간=per,
+                                               검증식=f"{r['n']} = Σ하위 {len(det)}개 (하위 항목을 양수로 표시 → 부호 반전 후 일치)",
+                                               보고금액=r[per], 계산금액=-calc, 차이=0.0, 결과='일치', 페이지=r['page']))
+                    continue
+                self._add_fs(stmt, r['label'], f"{r['n']} = Σ하위 {len(det)}개", per, r[per], calc, r['page'])
         inc = next((r for _, r in romans if '증가' in r['n'] and '현금' in r['n']), None)
         beg = next((r for _, r in romans if '기초' in r['n']), None)
         fx = next((r for _, r in romans if '환율' in r['n']), None)
@@ -327,17 +391,17 @@ class Report:
         if inc and len(acts) >= 3:
             for per in ('cy', 'py'):
                 self._add_fs(stmt, inc['label'], '현금증감 = 영업 + 투자 + 재무', per, inc[per],
-                             sum(a[per] for a in list(acts.values())[:3]), inc['page'])
+                             sum(a[per] or 0 for a in list(acts.values())[:3]), inc['page'])
         if inc and beg and end:
             for per in ('cy', 'py'):
                 self._add_fs(stmt, end['label'], '기말현금 = 증감 + 기초 + 환율변동', per, end[per],
-                             inc[per] + beg[per] + (fx[per] if fx else 0), end['page'])
+                             (inc[per] or 0) + (beg[per] or 0) + ((fx[per] or 0) if fx else 0), end['page'])
 
     def parse_sce(self, lines):
         # 열 위치: 기초/기말 행의 숫자 x1 군집
         xs = []
         for pg, l in lines:
-            if re.search(r'\d{4}\.\d{2}\.\d{2}', l['text']):
+            if SCE_DATE.search(l['text']):
                 xs += [tk['x1'] for tk in l['toks'] if is_num_tok(tk['t'])]
         cols = []
         for x in sorted(xs):
@@ -348,8 +412,18 @@ class Report:
         cols = [sum(c) / len(c) for c in cols]
         # 헤더 단어 → 열 이름
         hdr_tokens = []
+        first_data_top = None
         for pg, l in lines:
-            if not any(is_num_tok(tk['t']) for tk in l['toks'] if tk['t'] not in ('-',)) and l['top'] < 200:
+            if SCE_DATE.search(l['text']) and any(is_num_tok(tk['t']) for tk in l['toks']):
+                first_data_top = l['top']; break
+        for pg, l in lines:
+            txt = l['text'].replace(' ', '')
+            if first_data_top is not None and l['top'] >= first_data_top:
+                break
+            # 표 위 기간 문구(제16(당)기 ~부터 ~까지), 회사명, 단위 줄은 머리글이 아님
+            if re.search(r'부터|까지|현재|주식회사|단위|\(당\)|\(전\)', txt):
+                continue
+            if not any(is_num_tok(tk['t']) for tk in l['toks'] if tk['t'] not in ('-',)) and l['top'] < 260:
                 hdr_tokens += l['toks']
         merged = []
         i = 0
@@ -363,8 +437,9 @@ class Report:
             if tk['t'] in ('과', '목', '주석', '과목'):
                 continue
             c = (tk['x0'] + tk['x1']) / 2
-            j = min(range(len(cols)), key=lambda k: abs(cols[k] - 30 - c)) if cols else None
-            if j is not None and abs(cols[j] - 30 - c) < 70:
+            # 금액은 오른쪽 정렬: 열 j의 범위 = (앞 열 오른쪽 끝, 이 열 오른쪽 끝]. 가운데 정렬된 머리글이 속한 범위로 배정
+            j = next((k for k in range(len(cols)) if c <= cols[k] + 5 and (k == 0 or c > cols[k - 1] + 5)), None)
+            if j is not None and (j > 0 or c > cols[0] - 140):
                 names[j] += tk['t']
         rows = []
         for pg, l in lines:
@@ -381,13 +456,13 @@ class Report:
             if all(v is None for v in vals):
                 continue
             rows.append(dict(page=pg, label=label, n=norm(label), vals=vals))
-        names = [re.sub(r'^(지배기업의?소유주에게)?(귀속되는자본)?', '', n) or n for n in names]
+        names = [re.sub(r'^(지배기업의?소유주(에게)?(지분)?)?(귀속되는자본)?', '', n) or n for n in names]
         self.sce = dict(cols=cols, names=names, rows=rows)
 
     def foot_sce(self):
         stmt = '자본변동표'
         names, rows = self.sce['names'], self.sce['rows']
-        tot_idx = [i for i, nm in enumerate(names) if '합계' in nm or '총계' in nm]
+        tot_idx = [i for i, nm in enumerate(names) if '합계' in nm or '총계' in nm or '소계' in nm]
         # 가로
         for r in rows:
             prev = None
@@ -653,7 +728,7 @@ class Report:
     def period_tag(t):
         """'1) 당기' / '(2) 전기' / '1) 당기말' 처럼 표 제목이 기간만 나타내면 '당기'/'전기' 반환."""
         for txt in (t.get('subsub', ''), t.get('sub', '')):
-            k = re.sub(r'^\(?\d+\)\s*', '', txt or '').replace(' ', '')
+            k = re.sub(r'^(\(?\d+\)|[①-⑳]|[가-하]\.)\s*', '', txt or '').replace(' ', '')
             if k in ('당기', '당기말'):
                 return '당기'
             if k in ('전기', '전기말'):
@@ -688,9 +763,9 @@ class Report:
             je = self._col_idx(pri, '기말', '기말잔액', '기말금액', '기말장부금액')
             if jb is None or je is None:
                 continue
-            pmap = {r['n']: self._rowvec(pri, r) for r in pri['rows'] if r['nums']}
+            pmap = {r['n']: self._rowvec(pri, r) for r in pri['rows'] if r['nums'] and r['n']}
             for r in cur['rows']:
-                if not r['nums'] or r['n'] not in pmap:
+                if not r['nums'] or not r['n'] or r['n'] not in pmap:
                     continue
                 b = self._rowvec(cur, r)
                 if jb in b and je in pmap[r['n']]:
@@ -730,6 +805,24 @@ class Report:
                     if cnt:
                         self._add_note(t, '세로합계', tot['label'], t['colnames'][j] or f'열{j + 1}', tv[j], calc, len(body),
                                        f'합계 = Σ회사별({len(body)}행)')
+        # (1-2) 가중평균주식수 산정표: 적수 = 주식수 × 일수, 가중평균 = Σ적수 ÷ 기간일수
+        if '적수' in hdr.replace(' ', '') and '일수' in hdr.replace(' ', ''):
+            days, tot_prod, wavg = [], 0, None
+            for r in t['rows']:
+                v = [x for x, _, _ in r['nums']]
+                if len(v) >= 3 and v[1] and v[1] <= 366:
+                    calc = v[0] * v[1]
+                    self._add_note(t, '산식(곱셈)', r['label'] or '(행)', '적수', v[2], calc, 1,
+                                   f'적수 = 주식수 {v[0]:,.0f} × 일수 {v[1]:,.0f}', override='일치' if abs(v[2] - calc) < 1 else '불일치')
+                    days.append(v[1]); tot_prod += v[2]
+                elif '가중평균' in r['n'] and len(v) >= 1:
+                    wavg = (r, v[-1])
+            tot_days = (sum(days) if sum(days) <= 366 else max(days)) if days else 0   # 기간을 나눈 행이면 합, 아니면 최대
+            if wavg and tot_days:
+                r, wv = wavg
+                calc = tot_prod / tot_days
+                self._add_note(t, '산식(나눗셈)', r['label'], '가중평균주식수', wv, round(calc), 1,
+                               f'가중평균 = Σ적수 {tot_prod:,.0f} ÷ 기간일수 {tot_days:,.0f}일', override='일치' if abs(wv - calc) < 1 else '불일치')
         # (2) 기대손실률 × 총장부금액 = 손실충당금 (손실충당금 내역표)
         rows = t['rows']
         for i, r in enumerate(rows):
@@ -798,8 +891,10 @@ class Report:
         for t in self.note_tables:
             rows = [r for r in t['rows'] if r['nums']]
             eps = next((r for r in reversed(rows) if '주당' in r['n']), None)
-            ni = next((r for r in rows if r is not eps and ('순이익' in r['n'] or '순손실' in r['n'] or '순손익' in r['n'])), None)
             sh = next((r for r in rows if '가중평균' in r['n']), None)
+            # 분자: 가중평균주식수 행 바로 위에서 가장 가까운 순이익 행 (우선주배당금 차감 후 금액이 있으면 그것)
+            above = rows[:rows.index(sh)] if sh in rows else rows
+            ni = next((r for r in reversed(above) if r is not eps and ('순이익' in r['n'] or '순손실' in r['n'] or '순손익' in r['n'])), None)
             if not (ni and sh and eps) or rows.index(eps) < rows.index(sh):
                 continue
             nv, sv, ev = self._rowvec(t, ni), self._rowvec(t, sh), self._rowvec(t, eps)
@@ -899,6 +994,19 @@ class Report:
                     rf = None; seg, last_break, last_hdr = [], 0, 0
                     continue
                 is_sub = n.endswith('소계') or n == '계'
+                if seg and all(e['sub'] for e in seg) and not is_sub and len(seg) == 1 and seg[0]['r']['n'] != '소계':
+                    # 직전 합계만 남아 있고 그 뒤 세부항목이 없음(예: 자산총계 → 부채총계 나열) → 합계 검증 대상 아님
+                    if n in ('자본총계', '순자산') :
+                        a_row = next((x for x in t['rows'] if x['n'] == '자산총계'), None)
+                        l_row = next((x for x in t['rows'] if x['n'] == '부채총계'), None)
+                        if a_row and l_row:
+                            av, lv_, ev = self._rowvec(t, a_row), self._rowvec(t, l_row), vec
+                            for j, val in ev.items():
+                                if j in av and j in lv_:
+                                    self._add_note(t, '산식(차감)', r['label'], t['colnames'][j] or f'열{j + 1}', val, av[j] - lv_[j], 2,
+                                                   '자본총계 = 자산총계 - 부채총계')
+                    seg, last_break, last_hdr = [{'r': r, 'sub': True, 'cov': False}], 1, 1
+                    continue
                 if is_sub:
                     cands = [('Σ직전 항목', [e['r'] for e in seg[last_break:] if not e['cov']]),
                              ('Σ구분내 항목', [e['r'] for e in seg[last_hdr:] if not e['cov'] and not e['sub']])]
@@ -923,7 +1031,8 @@ class Report:
                             e['cov'] = True
                     seg.append({'r': r, 'sub': True, 'cov': False}); last_break = len(seg)
                 else:
-                    seg, last_break, last_hdr = [], 0, 0
+                    # 합계 → (유동성 대체 등) → 총계 구조를 위해 직전 합계를 다음 총계 후보로 남긴다
+                    seg, last_break, last_hdr = [{'r': r, 'sub': True, 'cov': False}], 1, 1
             else:
                 seg.append({'r': r, 'sub': False, 'cov': False})
         # 기초로 시작했지만 '기말' 라벨 없이 끝나는 표(예: 기초 발행주식수 → 가중평균유통보통주식수)는 마지막 행을 기말로 본다
@@ -1009,10 +1118,37 @@ class Report:
                         if txt:
                             n, pg, line, tv = txt
                             res, loc = '일치(본문서술)', f"주석{n} 본문 p.{self.pg(pg)}: {line[:60]}"
+                        elif not any(by_note.get(n) for n in refs if n not in (4, 5)):
+                            res, loc, tv = '참고(주석에 금액 표 없음)', '참조 주석이 서술만 있고 금액 표가 없음', None
                         else:
                             res, loc, tv = '미발견', '', None
                     self.fs_note_checks.append(dict(재무제표=stmap[st], 계정과목=r['label'], 주석번호=r['notes'], 기간=plabel,
                                                     재무제표금액_원=val, 주석금액=tv, 주석위치=loc, 결과=res))
+
+    def fs_note_pair_sums(self):
+        """주석에 합산 표시된 경우(예: 단기임대보증금 + 유동성장기임대보증금 = 주석 '유동' 장부가액) 일치 처리."""
+        by_note = {}
+        for t in self.note_tables:
+            by_note.setdefault(t['note'], []).append(t)
+        miss = [c for c in self.fs_note_checks if c['결과'] == '미발견' and c['재무제표'] == '재무상태표']
+        fs = [r for r in self.fs_rows.get('BS', []) if r['notes'] and r['cy'] is not None]
+        for c in miss:
+            per = 'cy' if c['기간'] == '당기' else 'py'
+            refs = [int(x) for x in c['주석번호'].split(',') if x.strip().isdigit()]
+            mine = next((r for r in fs if r['label'] == c['계정과목']), None)
+            if not mine:
+                continue
+            for other in fs:
+                if other is mine or not set(refs) & {int(x) for x in other['notes'].split(',') if x.strip().isdigit()}:
+                    continue
+                total = (mine[per] or 0) + (other[per] or 0)
+                hit = self._find_in_notes(by_note, [n for n in refs if n not in (4, 5)], total)
+                if hit and hit[3] <= 1:
+                    t, row, tv, d = hit
+                    c['결과'] = '일치(합산)'
+                    c['주석금액'] = tv
+                    c['주석위치'] = f"{c['계정과목']} + {other['label']} = 주석{t['note']} '{row['label']}' {tv:,.0f} (p.{self.pg(row['page'])})"
+                    break
 
     def note_rollforward_vs_bs(self):
         """주석 변동표 기말이 재무상태표 당기말과 맞으면, 같은 열/행의 기초가 재무상태표 전기말과 맞는지 확인."""
@@ -1050,6 +1186,17 @@ class Report:
                             continue
                         seen.add(key)
                         diff = bv - round(f['py'] / scale)
+                        if abs(diff) > 1 and "'" in where:
+                            key = where.split("'")[1].replace(' ', '')
+                            same = [x for x in cands if key and key in x['n']]
+                            tot_py = round(sum(x['py'] for x in same) / scale)
+                            if len(same) > 1 and abs(bv - tot_py) <= 1:
+                                self.cross_checks.append(dict(
+                                    검증항목=f"[연속성] 주석{t['note']} 변동표 기초 = 재무상태표 전기말 [{key}: " + '+'.join(x['label'] for x in same) + ']',
+                                    기준=f"주석{t['note']} p.{self.pg(t['page'])} {where} (유동·비유동 재분류 → 합산 비교)", 기준금액=bv,
+                                    대사=f"재무상태표 전기말 {'+'.join(x['label'] for x in same)} ({t['unit']} 환산)", 대사금액=tot_py,
+                                    차이=bv - tot_py, 결과=status(bv - tot_py, 1)))
+                                continue
                         self.cross_checks.append(dict(
                             검증항목=f"[연속성] 주석{t['note']} 변동표 기초 = 재무상태표 전기말 [{f['label']}]",
                             기준=f"주석{t['note']} p.{self.pg(t['page'])} {where} (기말 {ev:,.0f}=당기말 확인)", 기준금액=bv,
@@ -1115,11 +1262,25 @@ class Report:
                         continue
                     hits = [c for c in cands if abs(c[1] / unit - num) <= 1]
                     exact = [c for c in hits if abs(round(c[1] / unit) - num) < 1e-9]
-                    self.text_checks.append(dict(페이지=p, 문장=l['text'][:120], 서술금액=m.group(0),
-                                                 대응항목=', '.join(c[0] for c in (exact or hits)[:3]),
-                                                 결과='일치' if exact else ('단수차이' if hits else '대응항목 미발견')))
+                    res = '일치' if exact else ('단수차이' if hits else None)
+                    who = ', '.join(c[0] for c in (exact or hits)[:3])
+                    if res is None:   # 재무제표 계정이 아니라 주석 표 금액(담보 장부가액 등)을 서술한 경우
+                        nh = self._narrative_note_hit(num * unit, unit)
+                        res, who = ('일치(주석금액)', nh) if nh else ('대응항목 미발견', '')
+                    self.text_checks.append(dict(페이지=p, 문장=l['text'][:120], 서술금액=m.group(0), 대응항목=who, 결과=res))
 
     # ------------------------------------------------------------ special / inter-note
+    def _narrative_note_hit(self, amount, unit):
+        for t in getattr(self, 'note_tables', []):
+            scale = {'천원': 1000, '백만원': 1e6, '원': 1}.get(t['unit'])
+            if not scale:
+                continue
+            for r in t['rows']:
+                for v, _, _ in r['nums']:
+                    if v and abs(abs(v) * scale - amount) < unit / 2 + scale:
+                        return f"주석{t['note']} '{r['label']}' {v:,.0f}{t['unit']} (p.{self.pg(r['page'])})"
+        return None
+
     def special_checks(self):
         def add(item, a_desc, a, b_desc, b, note=''):
             diff = (a or 0) - (b or 0)
@@ -1177,17 +1338,16 @@ class Report:
                     end['nums'][0][0])
         # 자본변동표 기간 표기 점검
         rows = self.sce['rows']
-        dated = [r for r in rows if re.search(r'\d{4}\.\d{2}\.\d{2}', r['label'])]
+        dated = [r for r in rows if SCE_DATE.search(r['label'])]
         if dated:
-            years = sorted(set(re.search(r'(\d{4})\.', r['label']).group(1) for r in dated))
-            cur_y = years[-1]
-            for r in dated:
-                y = re.search(r'(\d{4})\.', r['label']).group(1)
+            # 회계기간이 6개월·비역년이어도 맞도록 연도가 아니라 순서로 판정: 앞 절반 = 전기(초·말), 뒤 절반 = 당기
+            half = len(dated) // 2 if len(dated) >= 4 else 0
+            for k, r in enumerate(dated):
                 lab = r['label']
-                ok = ('당기' in lab) == (y == cur_y) or ('전기' in lab) == (y != cur_y) and ('당기' not in lab or y == cur_y)
-                expected = '당기' if y == cur_y else '전기'
+                expected = '전기' if k < half else '당기'
                 good = expected in lab
-                self.special.append(dict(검증항목='자본변동표 기간 표기', 기준=lab, 기준금액=None, 대사=f'{y}년 → {expected}초/{expected}말 표기 기대',
+                self.special.append(dict(검증항목='자본변동표 기간 표기', 기준=lab, 기준금액=None,
+                                         대사=f'{k + 1}번째 기간행 → {expected}초/{expected}말 표기 기대',
                                          대사금액=None, 차이=None, 결과='일치' if good else '표기 확인', 비고=f"p.{self.pg(r['page'])}"))
 
     def run(self):
@@ -1208,6 +1368,7 @@ class Report:
         steps = [('재무제표 파싱', self.parse_statements), ('재무상태표', self.foot_bs), ('손익계산서', self.foot_is),
                  ('현금흐름표', self.foot_cf), ('자본변동표', self.foot_sce), ('재무제표간 대사', self.cross_statements),
                  ('주석 표 파싱', self.parse_notes), ('주석 풋팅', self.foot_notes), ('재무제표-주석 대사', self.fs_vs_notes),
+                 ('재무제표-주석 합산 대사', self.fs_note_pair_sums),
                  ('주석 변동표-재무상태표 연속성', self.note_rollforward_vs_bs),
                  ('본문 서술금액', self.narrative), ('특수검증', self.special_checks)]
         for name, fn in steps:
@@ -1229,7 +1390,7 @@ class Report:
 STMT_KEY = {'재무상태표': '재무상태표', '포괄손익계산서': '손익계산서', '자본변동표': '자본변동표', '현금흐름표': '현금흐름표'}
 PERIOD = {'cy': '당기', 'py': '전기', '가로': '가로', '세로': '세로'}
 OK = '일치'
-OK_SET = ('일치', '일치(본문서술)', '일치(합산)', '일치(반올림범위)')
+OK_SET = ('일치', '일치(본문서술)', '일치(합산)', '일치(반올림범위)', '일치(주석금액)')
 
 
 def to_calc_check(rep: Report) -> dict:
@@ -1504,33 +1665,44 @@ def add_consol_sep_sheet(wb, rows: list) -> None:
 
 # ------------------------------------------------------------------ 전기 감사보고서 대사
 def compare_prior_fs(cur: Report, prior: Report) -> list:
-    """당기 보고서의 '전기' 열 = 전기 감사보고서의 '당기' 열 (재작성·재분류 탐지).
-    재무상태표/손익계산서/현금흐름표 계정별 + 자본변동표 기말 열별."""
+    """당기 보고서의 '전기' 열 = 전기 보고서의 '당기' 열 (재작성·재분류 탐지).
+    같은 이름의 계정이 여러 번 나오면 금액이 같은 행끼리 먼저 짝짓고, 이름이 바뀐 계정은 같은 금액(0 제외)으로 짝짓는다."""
     def key(lbl):
         return re.sub(r'\s|\(.*?\)', '', ROMAN.sub('', lbl))
     out = []
     for code, stmt in (('BS', '재무상태표'), ('IS', '손익계산서'), ('CF', '현금흐름표')):
-        pmap = {}
-        for r in prior.fs_rows.get(code, []):
-            if r['cy'] is not None:
-                pmap.setdefault(key(r['label']), r)
-        used = set()
-        for r in cur.fs_rows.get(code, []):
-            if r['py'] is None:
-                continue
-            k = key(r['label'])
-            p = pmap.get(k)
-            used.add(k)
-            if p is None:
-                res = '전기보고서에 없음(계정 신설·명칭변경·재분류 확인)'
+        prows = [r for r in prior.fs_rows.get(code, []) if r['cy'] is not None]
+        crows = [r for r in cur.fs_rows.get(code, []) if r['py'] is not None]
+        used, pair = set(), {}
+        # 1) 같은 이름 + 같은 금액  2) 같은 이름(순서대로)  3) 이름이 달라도 같은 금액(0 아님) = 계정명 변경
+        for stage in (1, 2, 3):
+            for ci, r in enumerate(crows):
+                if ci in pair:
+                    continue
+                for pi, p in enumerate(prows):
+                    if pi in used:
+                        continue
+                    same_name = key(p['label']) == key(r['label'])
+                    same_val = p['cy'] == r['py']
+                    if (stage == 1 and same_name and same_val) or (stage == 2 and same_name) or \
+                            (stage == 3 and same_val and r['py'] != 0):
+                        pair[ci] = (pi, stage); used.add(pi); break
+        for ci, r in enumerate(crows):
+            if ci in pair:
+                pi, stage = pair[ci]
+                p = prows[pi]
+                if p['cy'] == r['py']:
+                    res = '일치' if stage != 3 else f"일치(계정명 변경: 전기 '{p['label']}')"
+                else:
+                    res = '불일치(재작성·재분류 확인)'
+                out.append({'stmt': stmt, 'label': r['label'], 'cur_prior_col': r['py'], 'prior_report_cy': p['cy'], 'result': res})
             else:
-                res = '일치' if p['cy'] == r['py'] else '불일치(재작성·재분류 확인)'
-            out.append({'stmt': stmt, 'label': r['label'], 'cur_prior_col': r['py'], 'prior_report_cy': p['cy'] if p else None,
-                        'result': res})
-        for k, p in pmap.items():
-            if k not in used:
-                out.append({'stmt': stmt, 'label': p['label'], 'cur_prior_col': None, 'prior_report_cy': p['cy'],
-                            'result': '당기보고서에 없음(계정 통합·명칭변경 확인)'})
+                res = '참고(0원 항목 신규 표시)' if r['py'] == 0 else '전기보고서에 없음(계정 신설·명칭변경·재분류 확인)'
+                out.append({'stmt': stmt, 'label': r['label'], 'cur_prior_col': r['py'], 'prior_report_cy': None, 'result': res})
+        for pi, p in enumerate(prows):
+            if pi not in used:
+                res = '참고(0원 항목 표시 생략)' if p['cy'] == 0 else '당기보고서에 없음(계정 통합·명칭변경 확인)'
+                out.append({'stmt': stmt, 'label': p['label'], 'cur_prior_col': None, 'prior_report_cy': p['cy'], 'result': res})
     ce = [r for r in cur.sce['rows'] if '말)' in r['label']]
     pe = [r for r in prior.sce['rows'] if '말)' in r['label']]
     if ce and pe:

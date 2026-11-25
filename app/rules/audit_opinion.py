@@ -48,6 +48,19 @@ def detect_audit_opinion(text: str) -> dict:
         # '핵심감사사항으로 결정된 이유' 직전 줄을 KAM 제목으로 본다
         for m in re.finditer(r"\n([^\n]{2,40})\n+\s*핵심감사사항으로\s*결정된\s*이유", text):
             kam.append(m.group(1).strip())
+        if not kam:   # '결정된 이유' 소제목이 없는 서식: KAM 단락 안에서 문단 끝 다음의 짧은 제목 줄
+            i0 = re.search(r"(?m)^\s*핵\s*심\s*감\s*사\s*사\s*항\s*$", text)
+            i1 = re.search(r"(?m)^.{0,10}재무제표에\s*대한\s*경영진", text[i0.end():]) if i0 else None
+            if i0:
+                block = text[i0.end(): i0.end() + (i1.start() if i1 else 3000)]
+                # 페이지 넘김으로 끼어드는 머리글·바닥글(회사명, '주주 및 이사회 귀중', 전자공시시스템 Page n) 제거
+                lines = [x.strip() for x in block.splitlines() if x.strip() and not re.search(
+                    r'전자공시시스템|귀중\s*$|^주식회사\s*\S+\s*$|^\S+\s*주식회사\s*$', x.strip())]
+                for k in range(1, len(lines) - 1):
+                    ln = lines[k]
+                    if 4 <= len(ln) <= 40 and not ln.endswith(('.', ':', '다')) and lines[k - 1].endswith('다.') \
+                            and len(lines[k + 1]) > 25 and not re.match(r'^[\d(①-⑳•·\-]', ln):
+                        kam.append(ln)
         checks.append({"item": f"핵심감사사항(KAM) 단락 존재 (감사기준서 701) - {len(kam)}건: " + (", ".join(kam) if kam else "제목 자동추출 실패"),
                        "ok": True})
         if kam:
@@ -123,8 +136,10 @@ def build_overview(text: str, rep=None) -> list[dict]:
 
     m = re.search(r"우리는\s*(.+?)\s*\(이하", text)
     add("entity", "감사대상 회사", m.group(1).replace("\n", "") if m else None)
-    m = re.search(r"제\s*(\d+)\s*기\s*\n?\s*(20\d{2})\s*년\s*(\d{2})\s*월\s*(\d{2})\s*일\s*부터\s*\n?\s*(20\d{2})\s*년\s*(\d{2})\s*월\s*(\d{2})\s*일", text)
-    add("period", "회계기간", f"제{m.group(1)}기 {m.group(2)}.{m.group(3)}.{m.group(4)}~{m.group(5)}.{m.group(6)}.{m.group(7)}" if m else None)
+    m = re.search(r"제\s*(\d+)\s*(?:\(당\))?\s*기[\s\S]{0,40}?(20\d{2})\s*년\s*(\d{1,2})\s*월\s*(\d{1,2})\s*일\s*부\s*터"
+                  r"[\s\S]{0,20}?(20\d{2})\s*년\s*(\d{1,2})\s*월\s*(\d{1,2})\s*일", text)
+    add("period", "회계기간", f"제{m.group(1)}기 {m.group(2)}.{int(m.group(3)):02d}.{int(m.group(4)):02d}~"
+                          f"{m.group(5)}.{int(m.group(6)):02d}.{int(m.group(7)):02d}" if m else None)
     m = re.search(r"([가-힣A-Za-z]+회계법인)", text)
     add("auditor", "감사인", m.group(1) if m else None)
     m = re.search(r"업무수행이사는\s*([가-힣]{2,4})\s*입니다", text)
@@ -171,7 +186,7 @@ def build_overview(text: str, rep=None) -> list[dict]:
         if "독립된감사인의내부회계관리제도감사보고서" in t:
             icfr += " (내부회계관리제도 감사보고서 첨부)"
     else:
-        icfr = "기재 없음 (연결보고서는 통상 별도보고서에 첨부)"
+        icfr = "기재 없음 (연결보고서는 통상 별도보고서에 첨부)" if "연결재무제표에대한" in t[:3000] else "기재 없음 (적용 대상 여부 확인)"
     add("icfr", "내부회계관리제도 의견", icfr)
 
     hours = _audit_hours(rep)
