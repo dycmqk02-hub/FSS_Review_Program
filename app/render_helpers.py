@@ -582,6 +582,28 @@ def render_overview(container, label, data):
     _simple_table(container, ["항목", "전기", "당기", "전기 대비"], rows, highlight_col=None, right_cols=(),
                   row_fills=[theme.VARIANCE_AMOUNT_COLOR if r[3] == "변동" else None for r in rows])   # 변동 = 연한 노랑
     n = sum(1 for r in rows if r[3] == "변동")
+    ps = (data.get("prior") or {}).get("summary")
+    if ps:
+        section_title(container, f"[{label}] 전기 감사보고서 대사 (당기 보고서의 전기 숫자 = 전기 보고서의 당기 숫자)")
+        row = ctk.CTkFrame(container, fg_color="transparent")
+        row.pack(fill="x", padx=4, pady=(0, 4))
+        badge(row, f"재무제표 {ps['fs_total']}건 중 불일치 {ps['fs_mismatch']}건",
+              theme.ACCENT_CORAL if ps['fs_mismatch'] else theme.ACCENT_MINT).pack(side="left", padx=4)
+        badge(row, f"주석 숫자 {ps['num_total']:,}건 대사 · 불일치 {ps['num_mismatch']} · 단수차이 {ps['num_round']}",
+              theme.ACCENT_CORAL if ps['num_mismatch'] else theme.ACCENT_MINT).pack(side="left", padx=4)
+        badge(row, f"짝 없음 {ps['num_unpaired']}칸(형식 변경 등)", theme.ACCENT_PEACH).pack(side="left", padx=4)
+        lst = [["당기 신설", x] for x in ps["notes_new"]] + [["당기 삭제", x] for x in ps["notes_removed"]] + \
+              [["제목 변경", x] for x in ps["notes_renamed"]]
+        if lst:
+            _simple_table(container, ["주석 변동", "주석"], lst, right_cols=(),
+                          row_fills=[theme.VARIANCE_AMOUNT_COLOR] * len(lst))
+        else:
+            empty_note(container, "주석 목록 변동 없음 (신설·삭제·제목변경 없음)")
+        bad = [r for r in (data.get("prior") or {}).get("note_compare", []) if r["result"].startswith("불일치")]
+        if bad:
+            _simple_table(container, ["주석", "표", "행", "열", "당기보고서 전기", "전기보고서 당기"],
+                          [[r["note"], r["table"][:40], r["row"], r["col"], _fmt(r["cur_prior"]), _fmt(r["prior_cur"])]
+                           for r in bad[:40]], right_cols=(4, 5))
     if prior is None:
         empty_note(container, "전기 감사보고서 PDF(선택)를 올리면 전기 대비 변동이 표시됩니다.")
     elif n:

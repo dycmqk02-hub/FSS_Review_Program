@@ -500,12 +500,15 @@ class Report:
             cur = None
 
         self.note_text = {}
+        self.note_index = []      # [{'no','title','page'}] - 전기/당기 주석 목록 비교용
         for pg, l in self.lines(s['notes_start'], s['notes_end']):
             text = l['text'].strip()
             self.note_text.setdefault(note_no, []).append((pg, text))
             m = NOTE_HEAD.match(text)
             if m and note_no <= int(m.group(1)) <= note_no + 3 and not text.endswith('다.') and len(text) < 60:
-                close(); note_no, note_title = int(m.group(1)), m.group(2).strip(); sub = subsub = ''; continue
+                close(); note_no, note_title = int(m.group(1)), m.group(2).strip(); sub = subsub = ''
+                self.note_index.append({'no': note_no, 'title': note_title, 'page': pg})
+                continue
             m = SUB_HEAD.match(text)
             if m and not text.startswith('(*'):
                 close(); sub = text[:60]; subsub = ''; continue

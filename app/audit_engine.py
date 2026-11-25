@@ -19,6 +19,7 @@ from .rules.consol_vs_sep import compare_consol_separate
 from .rules.variance_analysis import apply_flags, detect_unit
 from .rules import audit_footing as af
 from .rules import xbrl_pdf_tieout as xt
+from .rules import prior_note_compare as pnc
 from . import semiannual_engine as se
 
 FS_TYPE_CHOICES = ["연결", "별도", "개별", "연결 vs 별도"]
@@ -44,8 +45,12 @@ def _prior_review(prior_path: str | None, rep, label: str) -> dict | None:
     try:
         pdoc = pdf_utils.load_pdf(prior_path, extract_tables=False)
         prep = _footing(prior_path, f"{label}(전기)")
+        fs_cmp = af.compare_prior_fs(rep, prep)
+        note_list = pnc.compare_note_lists(rep, prep)
+        note_nums = pnc.compare_note_numbers(rep, prep, note_list)
         return {"file": os.path.basename(prior_path), "overview": build_overview(pdoc.full_text, prep),
-                "fs_compare": af.compare_prior_fs(rep, prep), "footing": prep}
+                "fs_compare": fs_cmp, "note_list": note_list, "note_compare": note_nums,
+                "summary": pnc.summary(note_list, note_nums, fs_cmp), "footing": prep}
     except Exception as e:  # noqa: BLE001
         return {"file": os.path.basename(prior_path), "overview": None, "fs_compare": [], "error": str(e)}
 

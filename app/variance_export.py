@@ -146,6 +146,9 @@ def _add_audit_overview(wb, result: dict) -> None:
             xt.add_tieout_sheet(wb, f"{lbl}_XBRL대사" if key != "single" else "XBRL대사", tie)
         if prior.get("fs_compare"):
             af.add_prior_sheet(wb, f"{lbl}_전기보고서대사" if key != "single" else "전기보고서대사", prior["fs_compare"])
+        if prior.get("note_list") is not None:
+            from .rules import prior_note_compare as pnc
+            pnc.add_sheets(wb, f"{lbl}_" if key != "single" else "", prior["note_list"], prior.get("note_compare") or [])
     af.add_overview_sheet(wb, docs)
 
 

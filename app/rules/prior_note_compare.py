@@ -1,0 +1,210 @@
+"""당기 감사보고서 ↔ 전기 감사보고서 주석 비교.
+
+1) 주석 목록 비교: 제목으로 짝을 지어 유지 / 번호변경 / 제목변경 / 당기 신설 / 당기 삭제 판정
+2) 주석 숫자 대사: 당기 보고서 주석 표의 '전기' 금액 = 전기 보고서 같은 표의 '당기' 금액
+
+표의 각 숫자 칸에 기간(당기/전기)을 붙이는 순서
+  - 열 이름에 '당기'/'전기'가 있으면 그 열의 기간 (예: 당기말 | 전기말)
+  - 아니면 표 안의 기간 머리행 (예: '당기말' 행 아래 ~ '전기말' 행 전까지)
+  - 아니면 표 제목 '1) 당기' / '(2) 전기'
+기간을 정할 수 없는 표(특정 시점 현황 등)는 대사 대상에서 제외한다.
+짝짓기 키 = (주석, 표 제목[번호·기간어 제거], 구분 머리행, 행 라벨, 열 이름[기간어 제거], 같은 키 내 순번)
+"""
+import re
+from difflib import SequenceMatcher
+
+from .audit_footing import norm
+
+PERIOD_WORDS = re.compile(r'(당기말|전기말|당기초|전기초|당기|전기|기말|기초)')
+PERIOD_ROW = {'당기', '당기말', '전기', '전기말'}
+
+
+def _clean_title(t: str) -> str:
+    t = re.sub(r'^\(?\d+\)\s*', '', t or '')
+    t = re.sub(r'[\s()\[\]<>:·ㆍ,\-]', '', t)
+    return t
+
+
+def _sim(a: str, b: str) -> float:
+    return SequenceMatcher(None, a, b).ratio()
+
+
+def compare_note_lists(cur, prior) -> list:
+    """returns [{'cur_no','cur_title','prior_no','prior_title','status'}]"""
+    cl, pl = getattr(cur, 'note_index', []), getattr(prior, 'note_index', [])
+    used, out = set(), []
+    for c in cl:
+        ck = _clean_title(c['title'])
+        best, score = None, 0.0
+        for i, p in enumerate(pl):
+            if i in used:
+                continue
+            sc = 1.0 if _clean_title(p['title']) == ck else _sim(ck, _clean_title(p['title']))
+            if sc > score:
+                best, score = i, sc
+        if best is not None and score >= 0.72:
+            used.add(best)
+            p = pl[best]
+            if score < 1.0:
+                st = '제목변경'
+            elif p['no'] != c['no']:
+                st = '번호변경'
+            else:
+                st = '유지'
+            out.append({'cur_no': c['no'], 'cur_title': c['title'], 'prior_no': p['no'], 'prior_title': p['title'],
+                        'status': st, 'cur_page': cur.pg(c['page']), 'prior_page': prior.pg(p['page'])})
+        else:
+            out.append({'cur_no': c['no'], 'cur_title': c['title'], 'prior_no': None, 'prior_title': '',
+                        'status': '당기 신설', 'cur_page': cur.pg(c['page']), 'prior_page': None})
+    for i, p in enumerate(pl):
+        if i not in used:
+            out.append({'cur_no': None, 'cur_title': '', 'prior_no': p['no'], 'prior_title': p['title'],
+                        'status': '당기 삭제', 'cur_page': None, 'prior_page': prior.pg(p['page'])})
+    out.sort(key=lambda r: (r['cur_no'] if r['cur_no'] is not None else 999, r['prior_no'] or 0))
+    return out
+
+
+def _cells(rep, want: str) -> dict:
+    """{(note_title_key, table_key, section, row, col, occ): (value_in_won, info)} - 기간이 want 인 칸만."""
+    out = {}
+    for t in rep.note_tables:
+        if not t['cols']:
+            continue
+        scale = {'천원': 1000, '백만원': 1e6, '원': 1}.get(t['unit'], 1)
+        ttag = rep.period_tag(t)
+        tkey = _clean_title(PERIOD_WORDS.sub('', t.get('sub', ''))) + '/' + _clean_title(PERIOD_WORDS.sub('', t.get('subsub', '')))
+        nkey = _clean_title(t['note_title'])
+        colp, colk = [], []
+        for nm in t['colnames']:
+            n = (nm or '').replace(' ', '')
+            colp.append('전기' if '전기' in n else ('당기' if '당기' in n else None))
+            colk.append(PERIOD_WORDS.sub('', n) or '금액')
+        row_period, section, seen = None, '', {}
+        for r in t['rows']:
+            if not r['nums']:
+                lab = re.sub(r'[<>()\[\]]', '', r['n'])
+                if lab in PERIOD_ROW:
+                    row_period = '전기' if '전기' in lab else '당기'
+                    section, seen = '', {}
+                elif r['label'] and len(r['n']) <= 30 and not PERIOD_WORDS.search(r['n']):
+                    section = r['n']   # 기간어가 든 행(열 머리글)은 구분으로 보지 않음
+                continue
+            vec = rep._rowvec(t, r)
+            for j, v in vec.items():
+                per = colp[j] if j < len(colp) and colp[j] else (row_period or ttag)
+                if per != want:
+                    continue
+                base = (nkey, tkey, section, r['n'], colk[j] if j < len(colk) else f'열{j + 1}')
+                occ = seen.get(base, 0); seen[base] = occ + 1
+                out[base + (occ,)] = (v * scale, {'note': t['note'], 'note_title': t['note_title'], 'table': t['title'],
+                                                  'row': r['label'], 'col': t['colnames'][j] if j < len(t['colnames']) else '',
+                                                  'page': rep.pg(r['page']), 'unit': t['unit'], 'raw': v})
+    return out
+
+
+def compare_note_numbers(cur, prior, note_pairs: list) -> list:
+    """당기 보고서의 전기 칸 ↔ 전기 보고서의 당기 칸. note_pairs: compare_note_lists 결과(제목변경 주석 연결용)."""
+    rename = {_clean_title(r['cur_title']): _clean_title(r['prior_title']) for r in note_pairs if r['cur_no'] and r['prior_no']}
+    c_cells = _cells(cur, '전기')
+    p_cells = _cells(prior, '당기')
+    # 제목이 바뀐 주석은 전기 제목 키로 맞춤
+    c_cells = {(rename.get(k[0], k[0]),) + k[1:]: v for k, v in c_cells.items()}
+    # 표 제목이 조금 바뀐 경우: 같은 주석 안에서 표 키를 유사도로 연결
+    p_tables = {}
+    for k in p_cells:
+        p_tables.setdefault(k[0], set()).add(k[1])
+    tmap = {}
+    for k in c_cells:
+        if k[1] in p_tables.get(k[0], set()):
+            continue
+        cands = p_tables.get(k[0], set())
+        best = max(cands, key=lambda x: _sim(k[1], x), default=None)
+        if best is not None and _sim(k[1], best) >= 0.7:
+            tmap[(k[0], k[1])] = best
+    c_cells = {(k[0], tmap.get((k[0], k[1]), k[1])) + k[2:]: v for k, v in c_cells.items()}
+    out, used = [], set()
+    for k, (cv, ci) in c_cells.items():
+        pv = p_cells.get(k)
+        if pv is None:
+            res, pval, pinfo = '전기보고서에 없음(신설·재분류·표 형식 변경 확인)', None, {}
+        else:
+            used.add(k)
+            pval, pinfo = pv
+            tol = 1000 if ci['unit'] == '천원' or pinfo.get('unit') == '천원' else 1
+            d = abs(cv - pval)
+            res = '일치' if d == 0 else ('단수차이' if d <= tol else '불일치(재작성·재분류 확인)')
+        out.append({'note': ci['note'], 'note_title': ci['note_title'], 'table': ci['table'], 'row': ci['row'],
+                    'col': ci['col'], 'unit': ci['unit'], 'cur_prior': ci['raw'],
+                    'prior_cur': pinfo.get('raw') if pv else None, 'cur_page': ci['page'],
+                    'prior_page': pinfo.get('page') if pv else None,
+                    'prior_note': pinfo.get('note') if pv else None, 'result': res})
+    for k, (pv, pi) in p_cells.items():
+        if k not in used:
+            out.append({'note': None, 'note_title': pi['note_title'], 'table': pi['table'], 'row': pi['row'], 'col': pi['col'],
+                        'unit': pi['unit'], 'cur_prior': None, 'prior_cur': pi['raw'], 'cur_page': None,
+                        'prior_page': pi['page'], 'prior_note': pi['note'],
+                        'result': '당기보고서에 없음(삭제·통합·표 형식 변경 확인)'})
+    order = {'불일치(재작성·재분류 확인)': 0, '단수차이': 1}
+    out.sort(key=lambda r: (order.get(r['result'], 3 if r['result'] == '일치' else 2), r['note'] or 999))
+    return out
+
+
+def summary(note_list: list, note_nums: list, fs_rows: list) -> dict:
+    cnt = lambda lst, key, val: sum(1 for r in lst if r[key] == val)
+    return {
+        'fs_total': len(fs_rows), 'fs_mismatch': sum(1 for r in fs_rows if r['result'].startswith('불일치')),
+        'notes_new': [f"{r['cur_no']}. {r['cur_title']}" for r in note_list if r['status'] == '당기 신설'],
+        'notes_removed': [f"{r['prior_no']}. {r['prior_title']}" for r in note_list if r['status'] == '당기 삭제'],
+        'notes_renamed': [f"{r['prior_title']} → {r['cur_title']}" for r in note_list if r['status'] == '제목변경'],
+        'num_total': sum(1 for r in note_nums if r['cur_prior'] is not None and r['prior_cur'] is not None),
+        'num_ok': cnt(note_nums, 'result', '일치'), 'num_round': cnt(note_nums, 'result', '단수차이'),
+        'num_mismatch': cnt(note_nums, 'result', '불일치(재작성·재분류 확인)'),
+        'num_unpaired': sum(1 for r in note_nums if r['cur_prior'] is None or r['prior_cur'] is None),
+    }
+
+
+def add_sheets(wb, prefix: str, note_list: list, note_nums: list) -> None:
+    from openpyxl.styles import Font, PatternFill
+    from openpyxl.formatting.rule import CellIsRule, FormulaRule
+    HDR = PatternFill('solid', start_color='1F3864')
+    YEL = PatternFill('solid', start_color='FFF9C4')
+
+    ws = wb.create_sheet(f'{prefix}주석목록비교'[:31])
+    ws.append(['당기 주석번호', '당기 주석 제목', '당기 p.', '전기 주석번호', '전기 주석 제목', '전기 p.', '판정'])
+    for c in ws[1]:
+        c.font = Font(name='Arial', bold=True, color='FFFFFF'); c.fill = HDR
+    for r in note_list:
+        ws.append([r['cur_no'], r['cur_title'], r['cur_page'], r['prior_no'], r['prior_title'], r['prior_page'], r['status']])
+        for c in ws[ws.max_row]:
+            c.font = Font(name='Arial', size=9)
+            if r['status'] != '유지':
+                c.fill = YEL
+    for col, w in zip('ABCDEFG', (10, 40, 8, 10, 40, 8, 12)):
+        ws.column_dimensions[col].width = w
+    ws.freeze_panes = 'A2'
+
+    ws = wb.create_sheet(f'{prefix}주석전기대사'[:31])
+    ws.append(['주석', '주석명', '표', '행', '열', '단위', '당기보고서 전기금액', '전기보고서 당기금액', '차이', '당기 p.',
+               '전기 p.', '결과'])
+    for c in ws[1]:
+        c.font = Font(name='Arial', bold=True, color='FFFFFF'); c.fill = HDR
+    for i, r in enumerate(note_nums, start=2):
+        ws.append([r['note'] if r['note'] is not None else f"(전기 {r['prior_note']})", r['note_title'], r['table'], r['row'],
+                   r['col'], r['unit'], r['cur_prior'], r['prior_cur'], f'=IF(OR(G{i}="",H{i}=""),"",G{i}-H{i})',
+                   r['cur_page'], r['prior_page'], r['result']])
+        for j in (7, 8, 9):
+            ws.cell(i, j).number_format = '#,##0;(#,##0);-'
+        for c in ws[i]:
+            c.font = Font(name='Arial', size=9)
+    for col, w in zip('ABCDEFGHIJKL', (8, 22, 36, 26, 18, 6, 18, 18, 12, 7, 7, 34)):
+        ws.column_dimensions[col].width = w
+    ws.freeze_panes = 'A2'
+    ws.auto_filter.ref = ws.dimensions
+    n = len(note_nums) + 1
+    if n > 1:
+        ws.conditional_formatting.add(f'L2:L{n}', CellIsRule(operator='equal', formula=['"일치"'],
+                                                             fill=PatternFill('solid', start_color='E2EFDA')))
+        ws.conditional_formatting.add(f'L2:L{n}', FormulaRule(formula=['LEFT(L2,3)="불일치"'],
+                                                              fill=PatternFill('solid', start_color='F8CBAD')))
+        ws.conditional_formatting.add(f'L2:L{n}', FormulaRule(formula=['AND(L2<>"일치",LEFT(L2,3)<>"불일치")'],
+                                                              fill=PatternFill('solid', start_color='FFF2CC')))
