@@ -1,6 +1,6 @@
 # 보고서 Review프로그램
 
-분·반기재무제표 검토보고서(추후 감사보고서로 확장 예정)를 업로드하면, 「분·반기재무제표
+분·반기재무제표 검토보고서와 **감사보고서**(재무제표·주석 정밀 풋팅, 전기 보고서 대비 비교, PDF↔XBRL 대사)를 업로드하면, 「분·반기재무제표
 검토준칙」 문단46 필수 기재사항, 의견유형, 비교표시 재무정보, 회계처리 변경 키워드, 표
 소계·합계 검산, 연결·별도 비교 등을 **규칙/키워드 기반으로 1차 스크리닝**해 주는 데스크톱
 프로그램입니다.
@@ -10,6 +10,20 @@
 > 평가 등)과 최종 검토의견 형성은 반드시 검토자가 직접 수행해야 합니다. 특히 숫자 합계
 > 검산·라벨 교차대사·회계처리 변경 탐지는 PDF 텍스트/표 추출 기반 휴리스틱이므로 **오탐
 > (false positive)과 누락(false negative)이 모두 발생할 수 있습니다.**
+
+## 0. 로컬 PC에서 실행하기 (Windows)
+
+1. **Python 3.10 이상** 설치 (https://www.python.org/downloads/) - 설치 첫 화면에서 **"Add python.exe to PATH" 체크**
+2. 이 폴더에서 **`run.bat` 더블클릭**
+   - 최초 1회: 가상환경(.venv) 생성 + 패키지 설치(customtkinter, pypdf, pdfplumber, openpyxl) - 인터넷 필요
+   - 두 번째부터: 바로 실행 (인터넷 불필요)
+3. (선택) 다른 PC에 배포할 EXE가 필요하면 `build_exe.bat` 실행 → `dist\FSS_ReviewProgram.exe`
+   - 저장소의 기존 `dist\FSS_ReviewProgram.exe`는 **이전 버전 빌드**이므로 다시 빌드해야 최신 기능이 들어갑니다.
+
+명령줄로 실행하려면: `python -m venv .venv` → `.venv\Scripts\activate` → `pip install -r requirements.txt` → `python main.py`
+
+**파일 처리 위치**: 업로드한 PDF(당기·전기)와 XBRL ZIP은 **이 PC 안에서 프로그램이 직접 읽고** 결과 Excel을
+다운로드 폴더에 저장합니다. 외부 서버나 AI로 전송하지 않으며, 패키지 설치 후에는 인터넷 연결 없이 동작합니다.
 
 ## 1. 실행 방법
 

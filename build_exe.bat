@@ -1,5 +1,6 @@
 @echo off
-REM 반기검토 사전리뷰 프로그램 - PyInstaller EXE 빌드 스크립트
+chcp 65001 >nul
+REM 보고서 Review 프로그램 - PyInstaller EXE 빌드 스크립트 (dist\FSS_ReviewProgram.exe 생성)
 setlocal
 
 cd /d "%~dp0"
@@ -23,6 +24,9 @@ echo [4/4] PyInstaller 빌드 중...
 pyinstaller --noconfirm --onefile --windowed ^
     --name FSS_ReviewProgram ^
     --collect-all customtkinter ^
+    --collect-all pdfplumber ^
+    --collect-all pdfminer ^
+    --collect-all pypdfium2 ^
     main.py
 if errorlevel 1 (
     echo.
