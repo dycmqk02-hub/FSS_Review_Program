@@ -8,3 +8,4 @@ config.json
 secrets.json
 *.spec
 .ref_cache/
+tests/samples/
