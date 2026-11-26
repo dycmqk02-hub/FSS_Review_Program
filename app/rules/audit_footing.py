@@ -212,6 +212,11 @@ class Report:
                     r['n'] = norm(r['label'])
                 out.append(r)
             rows[k] = out
+        # 현금흐름표는 'VI. 기말의 현금및현금성자산' 행에서 끝난다 - 그 뒤 행(주석 첫 페이지 등이 섞여 들어온 경우)은 버린다
+        cf = rows.get('CF', [])
+        i_end = next((i for i, r in enumerate(cf) if ROMAN.match(r['label']) and '기말' in r['n'] and '현금' in r['n']), None)
+        if i_end is not None:
+            rows['CF'] = cf[:i_end + 1]
         self.fs_rows = rows
         self.parse_sce(sce_lines)
 
@@ -366,6 +371,9 @@ class Report:
         for i, r in enumerate(rows):
             if r['cy'] is None or lv[i] == 3:
                 continue
+            # IV.증감 / V.기초 / VI.기말 / 환율변동 행은 하위 합계가 아니므로 Σ하위 검증 대상이 아님 (아래 별도 산식으로 검증)
+            if lv[i] == 0 and (any(k in r['n'] for k in ('기초', '기말', '환율')) or ('증가' in r['n'] and '현금' in r['n'])):
+                continue
             j = i + 1
             while j < len(rows) and lv[j] > lv[i]:
                 j += 1
@@ -376,8 +384,14 @@ class Report:
             det = [d for k, d in rng if lv[k] == m]
             if lv[i] == 0:
                 acts[r['n']] = r
+            outflow = '유출' in r['n'] or '지출' in r['n']
             for per in ('cy', 'py'):
                 calc = sum(d[per] or 0 for d in det)
+                # '현금유출액' 머리행은 음수(괄호), 하위 항목은 양수로 표시하는 서식: 재계산금액에 '-'를 붙여 차이를 계산
+                if outflow and r[per] and calc and (r[per] < 0) != (calc < 0):
+                    self._add_fs(stmt, r['label'], f"{r['n']} = -(Σ하위 {len(det)}개) (하위 항목을 양수로 표시 → 부호 반전)",
+                                 per, r[per], -calc, r['page'])
+                    continue
                 if abs((r[per] or 0) - calc) > 0.5 and abs((r[per] or 0) + calc) < 0.5 and r[per]:
                     self.fs_checks.append(dict(구분=stmt, 항목=r['label'], 기간=per,
                                                검증식=f"{r['n']} = Σ하위 {len(det)}개 (하위 항목을 양수로 표시 → 부호 반전 후 일치)",
@@ -488,10 +502,93 @@ class Report:
         self.sce_names = names
 
     # ------------------------------------------------------------ cross statements
-    def _add_x(self, item, a_desc, a, b_desc, b):
+    def _add_x(self, item, a_desc, a, b_desc, b, per=None, soft=None):
+        """per: 'cy'/'py' (없으면 항목명 끝의 '(전기)'/'전기'로 판단).
+        soft: 차이가 있어도 오류로 단정할 수 없는 대사(배당 미지급분, 표시 범위 차이 등) - 차이 시 '참고(soft)'."""
         diff = (a or 0) - (b or 0)
+        res = status(diff, 0, True)
+        if soft and res != OK:
+            res = f'참고({soft})'
+        if per is None:
+            per = 'py' if re.search(r'전기\)?\s*$', item) else 'cy'
         self.cross_checks.append(dict(검증항목=item, 기준=a_desc, 기준금액=a, 대사=b_desc, 대사금액=b, 차이=diff,
-                                      결과=status(diff, 0, True)))
+                                      결과=res, 기간=per))
+
+    def _cross_more(self, ni, ni_sce, names, tot_col, sce_rows, begs, ends):
+        """재무제표 간 같은 숫자가 나오는 추가 항목 대사.
+        - 포괄손익계산서 당기순이익 ↔ 현금흐름표 (1) 당기순이익
+        - (연결) 당기순이익 귀속 지배/비지배 ↔ 자본변동표 당기순이익 행
+        - 포괄손익계산서 총포괄손익 ↔ 자본변동표 총포괄손익 행 (있을 때)
+        - 현금흐름표 배당금 지급 / 유상증자 ↔ 자본변동표 배당 / 유상증자 (차이 시 '참고')
+        - 현금흐름표 조정 항목 ↔ 포괄손익계산서 동일 계정명 (차이 시 '참고')"""
+        is_, cf = self.fs_rows['IS'], self.fs_rows['CF']
+        pers = (('py', 0, '전기'), ('cy', 1, '당기'))
+        key = lambda s: re.sub(r'\(.*?\)|\s', '', ROMAN.sub('', s))
+        # 1) 손익계산서 당기순이익 ↔ 현금흐름표 당기순이익
+        cf_ni = next((r for r in cf if self._cf_level(r['label']) >= 1 and r['cy'] is not None and
+                      re.search(r'당기순(이익|손실|손익)', r['n'])), None)
+        if ni and cf_ni:
+            for per, _, pl in pers:
+                self._add_x(f'당기순이익: 포괄손익계산서 ↔ 현금흐름표 ({pl})', '포괄손익계산서 당기순이익', ni[per],
+                            f"현금흐름표 {cf_ni['label']}", cf_ni[per], per=per)
+        # 2) 연결: 당기순이익 귀속 ↔ 자본변동표 당기순이익 행 (비지배지분 열 / 나머지)
+        nci_col = next((j for j, nm in enumerate(names) if '비지배' in nm), None)
+        i_attr = next((i for i, r in enumerate(is_) if '귀속' in r['n'] and '총포괄' not in r['n'] and r['cy'] is None), None)
+        if nci_col is not None and i_attr is not None and len(ni_sce) >= 2:
+            attr = []
+            for r in is_[i_attr + 1:]:
+                if r['cy'] is None:
+                    break
+                attr.append(r)
+            own = next((r for r in attr if '지배' in r['n'] and '비지배' not in r['n']), None)
+            nci = next((r for r in attr if '비지배' in r['n']), None)
+            for per, k, pl in pers:
+                srow = ni_sce[k]['vals']
+                if nci:
+                    self._add_x(f'당기순이익 귀속(비지배지분): 포괄손익계산서 ↔ 자본변동표 ({pl})', '포괄손익계산서 비지배지분 귀속',
+                                nci[per], f'자본변동표 당기순이익 [{names[nci_col]}]', srow[nci_col], per=per)
+                if own:
+                    self._add_x(f'당기순이익 귀속(지배기업): 포괄손익계산서 ↔ 자본변동표 ({pl})', '포괄손익계산서 지배기업 귀속',
+                                own[per], f'자본변동표 당기순이익 [{names[tot_col]}] - [{names[nci_col]}]',
+                                (srow[tot_col] or 0) - (srow[nci_col] or 0), per=per)
+        # 3) 총포괄손익 (자본변동표에 총포괄손익 행이 따로 있는 서식만)
+        tci = next((r for r in is_ if '총포괄' in r['n'] and '귀속' not in r['n'] and r['cy'] is not None), None)
+        tci_sce = [r for r in sce_rows if '총포괄' in r['n']]
+        if tci and len(tci_sce) >= 2:
+            for per, k, pl in pers:
+                self._add_x(f'총포괄손익: 포괄손익계산서 ↔ 자본변동표 ({pl})', '포괄손익계산서 총포괄손익', tci[per],
+                            f'자본변동표 총포괄손익 [{names[tot_col]}]', tci_sce[k]['vals'][tot_col], per=per)
+        # 4) 현금흐름표 배당금 지급 / 유상증자 ↔ 자본변동표 같은 기간 변동 (절댓값 비교)
+        if len(begs) >= 2 and len(ends) >= 2:
+            for cf_kw, sce_kw, title, soft in (
+                    (r'배당금.*지급', '배당', '배당금 지급', '미지급배당·주식배당 등 비현금 배당 여부 확인'),
+                    (r'유상증자', '유상증자', '유상증자', '신주발행비·미납입분 등 확인')):
+                c = next((r for r in cf if re.search(cf_kw, r['n']) and r['cy'] is not None), None)
+                if c is None:
+                    continue
+                for per, k, pl in pers:
+                    i0, i1 = sce_rows.index(begs[k]), sce_rows.index(ends[k])
+                    seg = [r for r in sce_rows[i0 + 1:i1] if sce_kw in r['n']]
+                    if not seg:
+                        continue
+                    sv = sum(r['vals'][tot_col] or 0 for r in seg)
+                    self._add_x(f'{title}: 현금흐름표 ↔ 자본변동표 ({pl})', f"현금흐름표 {c['label']} (절댓값)", abs(c[per] or 0),
+                                f'자본변동표 {seg[0]["label"]} [{names[tot_col]}] (절댓값)', abs(sv), per=per, soft=soft)
+        # 5) 현금흐름표 '조정' 항목 ↔ 포괄손익계산서 동일 계정명 (절댓값 비교)
+        i_adj = next((i for i, r in enumerate(cf) if r['n'].endswith('조정') and r['cy'] is not None), None)
+        if i_adj is not None:
+            lv0 = self._cf_level(cf[i_adj]['label'])
+            is_map = {key(r['label']): r for r in is_ if r['cy'] is not None}
+            for r in cf[i_adj + 1:]:
+                if self._cf_level(r['label']) <= lv0:
+                    break
+                m = is_map.get(key(r['label']))
+                if m is None or r['cy'] is None:
+                    continue
+                for per, _, pl in pers:
+                    self._add_x(f"{m['label']}: 포괄손익계산서 ↔ 현금흐름표 조정 ({pl})", f"포괄손익계산서 {m['label']} (절댓값)",
+                                abs(m[per] or 0), f"현금흐름표 조정 {r['label']} (절댓값)", abs(r[per] or 0), per=per,
+                                soft='손익계산서 금액에 다른 항목 포함 여부 확인')
 
     def cross_statements(self):
         bs, is_, cf = self.fs_rows['BS'], self.fs_rows['IS'], self.fs_rows['CF']
@@ -507,19 +604,25 @@ class Report:
         rows, names = self.sce['rows'], self.sce_names
         ends = [r for r in rows if '말)' in r['label']]
         begs = [r for r in rows if '초)' in r['label']]
-        ni = next((r for r in is_ if '당기순이익' in r['n'] and ROMAN.match(r['label'])), None)
+        # 당기순이익 행: 로마자 번호가 있으면 우선, 없는 서식(신한알파 등)은 '당기순이익(손실)' 이름 그대로인 행
+        ni = next((r for r in is_ if '당기순이익' in r['n'] and ROMAN.match(r['label']) and r['cy'] is not None), None) or \
+            next((r for r in is_ if re.fullmatch(r'(당기순이익|당기순손실|당기순이익\(손실\)|당기순손익)', ROMAN.sub('', r['n']))
+                  and r['cy'] is not None), None)
         ni_sce = [r for r in rows if '당기순' in r['n']]
         tot_col = max((i for i, nm in enumerate(names) if '합계' in nm or '총계' in nm), default=len(names) - 1)
         if ni and len(ni_sce) >= 2:
-            self._add_x('당기순이익 (전기)', '포괄손익계산서', ni['py'], '자본변동표', ni_sce[0]['vals'][tot_col])
-            self._add_x('당기순이익 (당기)', '포괄손익계산서', ni['cy'], '자본변동표', ni_sce[1]['vals'][tot_col])
+            self._add_x('당기순이익: 포괄손익계산서 ↔ 자본변동표 (전기)', '포괄손익계산서 당기순이익', ni['py'],
+                        f'자본변동표 당기순이익 [{names[tot_col]}]', ni_sce[0]['vals'][tot_col])
+            self._add_x('당기순이익: 포괄손익계산서 ↔ 자본변동표 (당기)', '포괄손익계산서 당기순이익', ni['cy'],
+                        f'자본변동표 당기순이익 [{names[tot_col]}]', ni_sce[1]['vals'][tot_col])
+        self._cross_more(ni, ni_sce, names, tot_col, rows, begs, ends)
         if len(ends) >= 2 and len(begs) >= 2:
             for j, nm in enumerate(names):
                 self._add_x(f'전기말=당기초 [{nm}]', '자본변동표 전기말', ends[0]['vals'][j], '자본변동표 당기초', begs[1]['vals'][j])
         # [연속성] 현금흐름표 당기 기초현금 = 현금흐름표 전기 기말현금
         if cf_beg and cf_end:
             self._add_x('[연속성] 현금흐름표 기초현금(당기) = 기말현금(전기)', '현금흐름표 당기 기초현금', cf_beg['cy'],
-                        '현금흐름표 전기 기말현금', cf_end['py'])
+                        '현금흐름표 전기 기말현금', cf_end['py'], per='cy')
         # [연속성] 자본변동표 당기초 = 재무상태표 전기말 자본항목
         keymap0 = [('자본금', '자본금'), ('주식발행초과금', '주식발행초과금'), ('기타자본', '기타자본'),
                    ('결손금', '이익잉여금'), ('이익잉여금', '이익잉여금'), ('비지배', '비지배지분')]
@@ -541,8 +644,10 @@ class Report:
         if re_bs and ni and re_col is not None and len(begs) >= 2 and len(ends) >= 2:
             i0 = rows.index(begs[1]); i1 = rows.index(ends[1])
             others = sum((r['vals'][re_col] or 0) for r in rows[i0 + 1:i1] if '당기순' not in r['n'])
+            # 연결은 이익잉여금에 지배기업 귀속분만 들어가므로 자본변동표 이익잉여금 열의 당기순이익을 사용
+            ni_re = next((r['vals'][re_col] for r in rows[i0 + 1:i1] if '당기순' in r['n'] and r['vals'][re_col] is not None), ni['cy'])
             self._add_x('[연속성] 이익잉여금: 전기말 + 당기순이익 + 기타변동 = 당기말', '재무상태표 이익잉여금(당기말)', re_bs['cy'],
-                        f'전기말 {re_bs["py"]:,.0f} + 순이익 {ni["cy"]:,.0f} + 기타 {others:,.0f}', re_bs['py'] + ni['cy'] + others)
+                        f'전기말 {re_bs["py"]:,.0f} + 순이익(이익잉여금 귀속) {ni_re:,.0f} + 기타 {others:,.0f}', re_bs['py'] + ni_re + others)
         # 자본변동표 기말 ↔ 재무상태표 자본항목
         keymap = [('자본금', '자본금'), ('주식발행초과금', '주식발행초과금'), ('기타자본', '기타자본'),
                   ('결손금', '이익잉여금'), ('이익잉여금', '이익잉여금'), ('비지배', '비지배지분')]
@@ -1667,9 +1772,13 @@ def add_excel_sheets(wb, label: str, rep: Report, prefix: str = '') -> None:
 
     sheet('풋팅예외', ['검증영역', '재무제표/주석', '페이지', '항목', '검증내용', '보고금액', '비교금액', '결과'], exceptions(rep),
           [16, 26, 7, 34, 60, 16, 16, 13], num_cols=(6, 7), result_col=8, wrap=(2, 4, 5))
-    sheet('FS풋팅', ['재무제표', '페이지', '항목', '기간/방향', '검증식', '보고금액(원)', '재계산금액(원)', '차이', '결과'],
-          [(c['구분'], pg(c['페이지']), c['항목'], PERIOD.get(c['기간'], c['기간']), c['검증식'], c['보고금액'], c['계산금액'], None, c['결과'])
-           for c in rep.fs_checks], [14, 7, 34, 9, 46, 18, 18, 14, 10], num_cols=(6, 7, 8), diff=(8, 'F', 'G'), result_col=9, wrap=(3, 5))
+    # FS풋팅 시트: 재무제표 본문 풋팅 + 재무제표 간 대사(현금 기초·기말, 당기순이익, 자본 연속성 등)를 함께 출력
+    fs_rows_x = [(c['구분'], pg(c['페이지']), c['항목'], PERIOD.get(c['기간'], c['기간']), c['검증식'], c['보고금액'], c['계산금액'], None, c['결과'])
+                 for c in rep.fs_checks]
+    fs_rows_x += [('재무제표 간 대사', '', c['검증항목'], PERIOD.get(c.get('기간'), c.get('기간') or ''), f"{c['기준']} = {c['대사']}",
+                   c['기준금액'], c['대사금액'], None, c['결과']) for c in rep.cross_checks]
+    sheet('FS풋팅', ['재무제표', '페이지', '항목', '기간/방향', '검증식', '보고금액(원)', '재계산·대사금액(원)', '차이', '결과'],
+          fs_rows_x, [14, 7, 34, 9, 46, 18, 18, 14, 10], num_cols=(6, 7, 8), diff=(8, 'F', 'G'), result_col=9, wrap=(1, 3, 5))
     sheet('FS간대사', ['검증항목', '기준', '기준금액(원)', '대사대상', '대사금액(원)', '차이', '결과'],
           [(c['검증항목'], c['기준'], c['기준금액'], c['대사'], c['대사금액'], None, c['결과']) for c in rep.cross_checks],
           [36, 28, 18, 28, 18, 14, 10], num_cols=(3, 5, 6), diff=(6, 'C', 'E'), result_col=7, wrap=(1, 2, 4))

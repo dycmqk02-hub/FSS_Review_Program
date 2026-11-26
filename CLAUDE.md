@@ -46,8 +46,11 @@ tests/regression.py             회귀 테스트
 ### audit_footing.Report 처리 단계 (run())
 1. `locate_sections` 재무제표/주석 시작·끝 페이지
 2. `parse_statements` 재무제표 행 파싱 - 금액 열은 **'주석' 머리글 x좌표 기준**(고정 좌표 금지), 여러 줄 계정명 병합
-3. `foot_bs / foot_is / foot_cf / foot_sce` 본문 풋팅 (CF는 I.>1.>(1)>항목 계층, 유출액 양수표시 서식 인식)
-4. `cross_statements` 재무제표 간 대사 + 연속성(CF 기초=전기 기말, SCE 당기초=BS 전기말, 이익잉여금 등)
+3. `foot_bs / foot_is / foot_cf / foot_sce` 본문 풋팅 (CF는 I.>1.>(1)>항목 계층. '현금유출액' 머리행은 하위 양수표시면 재계산금액=-(Σ하위)로 차이 계산.
+   CF 행은 'VI. 기말의 현금' 행에서 잘라냄(뒤에 섞인 주석 행 제거), IV.증감/V.기초/VI.기말/환율 행은 Σ하위 검증 제외)
+4. `cross_statements` + `_cross_more` 재무제표 간 대사 + 연속성(CF 기초=전기 기말, CF 기말=BS 현금, SCE 당기초=BS 전기말, 이익잉여금 등),
+   당기순이익 IS↔SCE↔CF, (연결) 지배/비지배 귀속↔SCE, 총포괄손익, CF 배당금지급·유상증자↔SCE·CF 조정↔IS 동일계정(차이 시 '참고').
+   결과는 FS간대사 시트와 **FS풋팅 시트 하단('재무제표 간 대사')**에 함께 출력
 5. `parse_notes` 주석 표 추출 (`(단위` 줄에서 표 시작, `(n)`/`n)`/①②/가. 소제목, 표 기간태그 `period_tag`)
 6. `foot_notes` 세로합계(후보식 중 최소차이), 가로합계, 롤포워드, 전기말→당기초, 산식(지분율·기대손실률·EPS·적수·법인세 관계; 가중평균주식수 표에 기간 열(시작일~종료일)이 있으면 날짜로 일수 재계산 → 적수·가중평균 검증, 일수 열 합산 안 함)
 7. `fs_vs_notes` → `fs_note_pair_sums` → `note_rollforward_vs_bs` 재무제표↔주석 대사
