@@ -18,13 +18,11 @@ _ENGINES = {
 
 def run_review(report_type: str, fs_type: str, accounting_standard: str, files: dict, settings: dict,
                pm_consol: float | None = None, pm_separate: float | None = None,
-               xbrl_source: str | None = None, excel_path: str | None = None,
-               company_name: str | None = None, period: str | None = None, progress_cb=None) -> dict:
+               xbrl_source: str | None = None, progress_cb=None) -> dict:
     """progress_cb(msg: str, percent: float 0~100)."""
     engine = _ENGINES.get(report_type)
     if engine is None:
         raise ValueError(f"지원하지 않는 보고서 종류입니다: {report_type}")
     return engine.run_review(fs_type, accounting_standard, files, settings,
                               pm_consol=pm_consol, pm_separate=pm_separate,
-                              xbrl_source=xbrl_source, excel_path=excel_path,
-                              company_name=company_name, period=period, progress_cb=progress_cb)
+                              xbrl_source=xbrl_source, progress_cb=progress_cb)

@@ -1,6 +1,8 @@
 """리뷰 결과 전체 및 증감분석표(재무상태표/손익계산서/자본변동표/현금흐름표) Excel 내보내기."""
 
 STATEMENT_ORDER = ["재무상태표", "손익계산서", "자본변동표", "현금흐름표"]
+# 사용자 요청으로 Excel에서 만들지 않는 증감분석 시트 (화면 '증감분석' 탭에는 계속 표시)
+EXCLUDED_VARIANCE_SHEETS = {"연결_자본변동표", "연결_현금흐름표", "별도_자본변동표", "별도_현금흐름표"}
 
 
 def _write_sheet(wb, sheet_name: str, doc_label: str, stmt: str, data: dict, unit: str | None,
@@ -69,7 +71,22 @@ def _add_variance_sheets(wb, result: dict) -> None:
         for stmt in STATEMENT_ORDER:
             stmt_data = variance_tables.get(stmt, {"rows": [], "note": "데이터 없음"})
             sheet_name = f"{doc_label}_{stmt}" if len(docs) > 1 else stmt
+            if sheet_name in EXCLUDED_VARIANCE_SHEETS:
+                continue
             _write_sheet(wb, sheet_name, doc_label, stmt, stmt_data, unit, pm)
+
+
+def _add_footing_sheets(wb, result: dict) -> None:
+    """감사보고서 정밀 풋팅 결과(풋팅요약/풋팅예외/FS풋팅/FS간대사/주석풋팅/FS-주석대사/본문수치대사/
+    특수검증/추출표목록) 시트 추가. 연결 vs 별도면 '연결_'/'별도_' 접두어 + 계정별 금액비교 시트."""
+    from .rules import audit_footing as af
+    sections = result.get("sections", {})
+    docs = [(k, lbl) for k, lbl in (("single", result.get("fs_type", "")), ("consol", "연결"), ("separate", "별도"))
+            if k in sections and sections[k].get("footing") is not None]
+    for key, lbl in docs:
+        prefix = f"{lbl}_" if len(docs) > 1 else ""
+        af.add_excel_sheets(wb, lbl, sections[key]["footing"], prefix=prefix)
+    # '연결vs별도_금액비교' 시트는 사용자 요청으로 Excel에서 제외 (화면 '연결 vs 별도' 탭에는 계속 표시)
 
 
 def export_full_excel(result: dict, path: str) -> None:
@@ -81,30 +98,62 @@ def export_full_excel(result: dict, path: str) -> None:
 
     wb = openpyxl.Workbook()
     ws = wb.active
+    if result.get("report_type") == "감사" and not result.get("not_supported"):
+        # 감사보고서: 요약 시트는 '개요'(감사의견·KAM·강조사항·내부회계 등 전기 대비 당기)만 남긴다
+        _add_audit_overview(wb, result)
+        wb.remove(ws)
+        _add_footing_sheets(wb, result)
+        _add_variance_sheets(wb, result)
+        _add_tail_sheets(wb, result)
+        if "개요" in wb.sheetnames:
+            wb.move_sheet("개요", offset=-wb.sheetnames.index("개요"))
+        wb.active = 0
+        wb.save(path)
+        return
     ws.title = "요약"
     ws.column_dimensions["A"].width = 120
 
     for line in render_text_report(result).splitlines():
+        # '='로 시작하는 구분선이 수식으로 저장되어 #VALUE! 가 나던 문제 수정 - 문자열로 강제
         ws.append([line])
+        if line.startswith("="):
+            cell = ws.cell(row=ws.max_row, column=1)
+            cell.value = line
+            cell.data_type = "s"
         stripped = line.strip()
         if stripped.startswith("=") or (stripped.startswith("[") and stripped.endswith("]")):
             ws.cell(row=ws.max_row, column=1).font = Font(bold=True)
 
     if not result.get("not_supported"):
+        _add_footing_sheets(wb, result)
         _add_variance_sheets(wb, result)
 
-    excel_data = result.get("excel_verify_data")
-    if excel_data:
-        from .rules import excel_review_engine as xlengine
-        xlengine.add_verification_sheets(
-            wb, excel_data["sum_results"], excel_data["recon_results"], excel_data["compare_results"],
-            source_wb=excel_data["wb"], source_path=excel_data["path"])
-        wb.active = 0
-
-    for label, text in (result.get("ai_reviews") or {}).items():
-        ai_ws = wb.create_sheet(f"AI심층분석_{label}"[:31])
-        ai_ws.column_dimensions["A"].width = 120
-        for line in text.splitlines():
-            ai_ws.append([line])
-
+    _add_tail_sheets(wb, result)
     wb.save(path)
+
+
+def _add_audit_overview(wb, result: dict) -> None:
+    from .rules import audit_footing as af
+    sections = result.get("sections", {})
+    docs = []
+    for key, lbl in (("single", result.get("fs_type", "")), ("consol", "연결"), ("separate", "별도")):
+        d = sections.get(key)
+        if not d or not d.get("overview"):
+            continue
+        prior = d.get("prior") or {}
+        docs.append((lbl, d["overview"], prior.get("overview"), prior.get("file")))
+        tie = d.get("xbrl_tieout")
+        if tie:
+            from .rules import xbrl_pdf_tieout as xt
+            xt.add_tieout_sheet(wb, f"{lbl}_XBRL대사" if key != "single" else "XBRL대사", tie)
+        if prior.get("fs_compare"):
+            af.add_prior_sheet(wb, f"{lbl}_전기보고서대사" if key != "single" else "전기보고서대사", prior["fs_compare"])
+        if prior.get("note_list") is not None:
+            from .rules import prior_note_compare as pnc
+            pnc.add_sheets(wb, f"{lbl}_" if key != "single" else "", prior["note_list"], prior.get("note_compare") or [])
+    af.add_overview_sheet(wb, docs)
+
+
+def _add_tail_sheets(wb, result: dict) -> None:
+    """(예비) 추가 시트 훅 - Excel 정밀검증/AI 심층리뷰 기능 제거로 현재는 추가 시트 없음."""
+    return None

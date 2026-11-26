@@ -65,7 +65,6 @@ def _render_single(title: str, data: dict) -> str:
     lines.append(_render_calc_check(data.get("calc_check", {})))
     lines.append(_render_cross_check_fs(data.get("cross_check_fs", {})))
     lines.append(_render_note_check(data.get("note_check", {})))
-    lines.append(_render_disclosure_check(data.get("disclosure_check", {})))
 
     return "\n".join(lines)
 
@@ -160,26 +159,6 @@ def _render_note_check(note_check: dict) -> str:
     return "\n".join(lines)
 
 
-def _render_disclosure_check(disclosure_check: dict) -> str:
-    lines = ["  [공시사항점검표 대사 - 감사조서서식 8400, 키워드 매칭 휴리스틱]"]
-    err = disclosure_check.get("error")
-    if err:
-        lines.append(f"   - {err}")
-        return "\n".join(lines)
-    items = disclosure_check.get("items", [])
-    if not items:
-        lines.append("   - 대사할 항목이 없습니다.")
-        return "\n".join(lines)
-    n_found = sum(1 for i in items if i["found"])
-    lines.append(f"   - 점검표: {disclosure_check.get('path')}")
-    lines.append(f"   - 확인 {n_found} / 미확인 {len(items) - n_found} (총 {len(items)}건)")
-    for i in items:
-        if i["found"]:
-            continue
-        lines.append(f"     - [{i.get('section') or ''}] [{i['reference']}] {i['text'][:100]}")
-    return "\n".join(lines)
-
-
 def _render_variance(variance_tables: dict, unit: str | None, pm_threshold: float | None) -> str:
     lines = ["  [재무제표 증감분석 - 당기 vs 전기 (휴리스틱)]"]
     if unit:
@@ -218,23 +197,6 @@ def _render_consol_vs_sep(data: dict) -> str:
     return "\n".join(lines)
 
 
-def _render_excel_compare(compare_results: list | None) -> str:
-    lines = ["[연결-별도 비교 - Excel 정밀검증, 계정과목 단위]"]
-    if not compare_results:
-        lines.append("   - Excel 정밀검증 파일이 준비되지 않았습니다.")
-        return "\n".join(lines)
-    n_diff = sum(1 for r in compare_results if (r.get("차이") or 0) != 0)
-    lines.append(f"   - 비교 {len(compare_results)}건 중 차이 존재 {n_diff}건 (차이가 있다고 오류는 아님)")
-    for r in compare_results[:60]:
-        lines.append(f"   - [{r['구분표']}] {r['계정과목']}({r['기간']}): "
-                     f"별도 {r['별도']:,.0f} vs 연결 {r['연결']:,.0f} (차이 {r['차이']:,.0f})"
-                     if r.get("별도") is not None and r.get("연결") is not None else
-                     f"   - [{r['구분표']}] {r['계정과목']}({r['기간']}): 별도 {r.get('별도')} / 연결 {r.get('연결')}")
-    if len(compare_results) > 60:
-        lines.append(f"   - 외 {len(compare_results) - 60}건 (GUI 화면 또는 자동 저장된 Excel에서 전체 확인 가능)")
-    return "\n".join(lines)
-
-
 def _render_reference(ref_matches: dict, ref_sources: list) -> str:
     lines = ["[참조자료 자동 매칭 결과]"]
     for src in ref_sources or []:
@@ -250,6 +212,24 @@ def _render_reference(ref_matches: dict, ref_sources: list) -> str:
         for h in hits:
             lines.append(f"     · [{h.get('source_label', '참조자료')}] {h['file']} p.{h['page']}: ...{h['snippet']}...")
     return "\n".join(lines)
+
+
+def _render_footing_summary(title: str, data: dict) -> str:
+    out = [title, f"  {'검증영역':<18}{'건수':>6}{'일치':>6}{'단수차이':>8}{'불일치':>6}{'기타':>6}"]
+    for a in data["footing_summary"]:
+        out.append(f"  {a['area']:<18}{a['total']:>6}{a['ok']:>6}{a['rounding']:>8}{a['mismatch']:>6}{a['other']:>6}")
+    for e in data.get("footing_errors") or []:
+        out.append(f"  [오류] {e}")
+    rep = data.get("footing")
+    if rep is not None:
+        from .rules.audit_footing import exceptions
+        ex = exceptions(rep)
+        if ex:
+            out.append(f"  예외 {len(ex)}건 (상위 40건, 전체는 Excel '풋팅예외' 시트):")
+            for e in ex[:40]:
+                amt = f" {e[5]:,.0f} vs {e[6]:,.0f}" if isinstance(e[5], (int, float)) and isinstance(e[6], (int, float)) else ""
+                out.append(f"   - [{e[7]}] {e[0]} {e[1]} p.{e[2]} {e[3]} :: {str(e[4])[:70]}{amt}")
+    return "\n".join(out)
 
 
 def render_text_report(result: dict) -> str:
@@ -271,22 +251,23 @@ def render_text_report(result: dict) -> str:
         return "\n".join(lines)
 
     sections = result["sections"]
+    doc_word = "감사보고서" if result.get("report_type") == "감사" else "검토보고서"
+    for key, lbl in (("single", result["fs_type"]), ("consol", "연결"), ("separate", "별도")):
+        if key in sections and sections[key].get("footing_summary"):
+            lines.append("")
+            lines.append(_render_footing_summary(f"[{lbl} {doc_word} 정밀 풋팅 요약]", sections[key]))
     if "single" in sections:
         lines.append("")
         lines.append(_render_single(f"[{result['fs_type']} {result['report_type']}보고서]", sections["single"]))
         lines.append("")
-        lines.append(_render_excel_compare(result.get("excel_compare")))
-        lines.append("")
         lines.append(_render_reference(sections.get("reference_matches", {}), result.get("ref_sources", [])))
     else:
         lines.append("")
-        lines.append(_render_single("[연결재무제표 검토보고서]", sections["consol"]))
+        lines.append(_render_single(f"[연결재무제표 {doc_word}]", sections["consol"]))
         lines.append("")
-        lines.append(_render_single("[별도재무제표 검토보고서]", sections["separate"]))
+        lines.append(_render_single(f"[별도재무제표 {doc_word}]", sections["separate"]))
         lines.append("")
         lines.append(_render_consol_vs_sep(sections["consol_vs_sep"]))
-        lines.append("")
-        lines.append(_render_excel_compare(result.get("excel_compare")))
         lines.append("")
         lines.append(_render_reference(sections.get("reference_matches", {}), result.get("ref_sources", [])))
 

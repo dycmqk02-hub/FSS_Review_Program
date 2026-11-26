@@ -1,0 +1,4 @@
+# Windows batch files must keep CRLF line endings (cmd.exe misparses LF-only files).
+# Stored as-is (no conversion) so ZIP downloads and raw downloads also get CRLF.
+*.bat -text
+*.cmd -text

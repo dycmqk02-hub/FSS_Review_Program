@@ -115,7 +115,7 @@ def empty_note(parent, text):
 
 
 def render_checklist(container, items):
-    section_title(container, "필수 기재사항 체크리스트 (문단46 등)")
+    section_title(container, "필수 기재사항 체크리스트 (검토: 준칙 문단46 / 감사: 감사기준서 700·701·570 등)")
     found_n = sum(1 for i in items if i["found"])
     req_missing = [i for i in items if i.get("required") and not i["found"]]
     stat_row = ctk.CTkFrame(container, fg_color="transparent")
@@ -147,7 +147,7 @@ def render_checklist(container, items):
 
 
 def render_opinion(container, opinion_data):
-    section_title(container, "검토의견 유형 판단")
+    section_title(container, "의견 유형 판단 (검토의견 / 감사의견)")
     op_type = opinion_data["opinion_type"]
     color_map = {
         "적정(변형 없음)": theme.ACCENT_MINT,
@@ -256,8 +256,6 @@ def render_calc_check(container, calc_check):
         sources.append(("XBRL(정밀 매칭)", calc_check["xbrl"], theme.ACCENT_MINT))
     if calc_check.get("pdf"):
         sources.append(("PDF 표(휴리스틱, 오탐 가능)", calc_check["pdf"], theme.ACCENT_PEACH))
-    if calc_check.get("excel"):
-        sources.append(("Excel(직접 검토, 가장 신뢰도 높음)", calc_check["excel"], theme.ACCENT_SKY))
     if not sources:
         empty_note(container, "검증 결과가 없습니다.")
         return
@@ -299,9 +297,6 @@ def render_cross_check_fs(container, cross_check):
         sources.append(("XBRL(정밀 매칭)", cross_check["xbrl"], theme.ACCENT_MINT))
     if cross_check.get("pdf") is not None:
         sources.append(("PDF 표(휴리스틱, 오탐 가능)", cross_check["pdf"], theme.ACCENT_PEACH))
-    if cross_check.get("excel") is not None:
-        sources.append(("Excel(직접 검토 - 재무제표간/재무제표-주석간/주석간 모두 포함)",
-                          cross_check["excel"], theme.ACCENT_SKY))
     if not sources:
         empty_note(container, "검증 결과가 없습니다.")
         return
@@ -316,7 +311,7 @@ def render_cross_check_fs(container, cross_check):
             empty_note(container, "불일치 없음")
             continue
         for f in findings[:30]:
-            section_title(container, f["item"])
+            section_title(container, (f"[{f['result']}] " if f.get("result") else "") + f["item"])
             table = ctk.CTkFrame(container, fg_color=theme.BG_CARD, corner_radius=10,
                                   border_width=1, border_color=theme.BORDER_SOFT)
             table.pack(fill="x", pady=4, padx=4)
@@ -335,50 +330,6 @@ def render_cross_check_fs(container, cross_check):
             table.grid_columnconfigure(2, weight=1)
         if len(findings) > 30:
             empty_note(container, f"외 {len(findings) - 30}건 더 있습니다 (자동 저장된 Excel에서 전체 확인 가능).")
-
-
-def render_disclosure_check(container, disclosure_check):
-    """disclosure_check: {"items":[{"section","reference","text","keywords","hits","found"}],
-    "path","error"}. 감사조서서식 8400 공시사항점검표(KIFRS/일반기준)와 보고서 본문을 키워드
-    기반으로 대사한 결과."""
-    section_title(container, "공시사항점검표 대사 (감사조서서식 8400)")
-    empty_note(container, "⚠️ 형태소 분석 없는 키워드 매칭 휴리스틱입니다 - 요구사항 문장이 "
-                           "추상적인 경우 오탐(실제로는 있는데 '미확인'으로 표시)이 있을 수 있습니다. "
-                           "반드시 '미확인' 항목을 원문·주석과 직접 대조하십시오.")
-    err = disclosure_check.get("error")
-    path = disclosure_check.get("path")
-    if err:
-        empty_note(container, f"{err}\n(⚙ 참조자료 폴더 설정에서 경로를 확인하세요)")
-        return
-    items = disclosure_check.get("items", [])
-    if not items:
-        empty_note(container, "대사할 공시사항점검표 항목이 없습니다.")
-        return
-
-    n_found = sum(1 for i in items if i["found"])
-    n_missing = len(items) - n_found
-    badge(container, f"확인 {n_found} / 미확인 {n_missing} (총 {len(items)}건)",
-          theme.ACCENT_CORAL if n_missing else theme.ACCENT_MINT).pack(anchor="w", padx=4, pady=(0, 4))
-    if path:
-        empty_note(container, f"점검표 파일: {path}")
-
-    missing = [i for i in items if not i["found"]]
-    by_section: dict[str, list] = {}
-    for i in missing:
-        by_section.setdefault(i.get("section") or "(섹션 미상)", []).append(i)
-
-    for sec, sec_items in by_section.items():
-        section_title(container, f"{sec} - 미확인 {len(sec_items)}건")
-        for i in sec_items[:25]:
-            row = card(container)
-            ctk.CTkLabel(row, text=f"[{i['reference']}]", font=theme.FONT_SMALL,
-                         text_color=theme.ACCENT_PRIMARY_HOVER, anchor="w").pack(fill="x", padx=12, pady=(8, 0))
-            ctk.CTkLabel(row, text=i["text"], font=theme.FONT_SMALL, text_color=theme.TEXT_MAIN,
-                         anchor="w", justify="left", wraplength=780).pack(fill="x", padx=12, pady=(2, 4))
-            ctk.CTkLabel(row, text=f"검색 키워드: {', '.join(i['keywords'])}", font=theme.FONT_SMALL,
-                         text_color=theme.TEXT_SUB, anchor="w").pack(fill="x", padx=12, pady=(0, 8))
-        if len(sec_items) > 25:
-            empty_note(container, f"외 {len(sec_items) - 25}건 더 있습니다.")
 
 
 def render_note_check(container, note_check):
@@ -533,6 +484,18 @@ def render_consol_vs_sep(container, data):
         badge(top, "별도 O" if c["in_separate"] else "별도 X",
               theme.ACCENT_MINT if c["in_separate"] else theme.ACCENT_CORAL).pack(side="left", padx=4)
 
+    amt = data.get("amount_comparison") or []
+    if amt:
+        section_title(container, "연결 vs 별도 재무제표 계정별 금액 비교 (차이 = 검토포인트, 오류 아님)")
+        diff_rows = [r for r in amt if r["status"] != "동일"]
+        badge(container, f"비교 {len(amt)}계정 / 동일 {len(amt) - len(diff_rows)} / 차이·한쪽만 {len(diff_rows)}",
+              theme.ACCENT_SKY).pack(anchor="w", padx=4, pady=(0, 6))
+        _simple_table(container, ["재무제표", "계정과목", "연결 당기", "별도 당기", "차이(당기)", "연결 전기", "별도 전기",
+                                  "차이(전기)", "상태"],
+                      [[r["stmt"], r["label"], _fmt(r["consol_cy"]), _fmt(r["sep_cy"]), _fmt(r["diff_cy"]),
+                        _fmt(r["consol_py"]), _fmt(r["sep_py"]), _fmt(r["diff_py"]), r["status"]]
+                       for r in diff_rows[:60]], right_cols=(2, 3, 4, 5, 6, 7))
+
     section_title(container, "실무 참고 체크리스트 (준칙 명문조항은 아님)")
     for item in data["practice_checklist"]:
         row = card(container)
@@ -542,41 +505,106 @@ def render_consol_vs_sep(container, data):
                      anchor="w", justify="left", wraplength=780).pack(fill="x", padx=12, pady=(0, 8))
 
 
-def render_excel_compare(container, compare_results):
-    """Excel 정밀검증(사이드바 ⑧)의 계정과목 단위 연결-별도 비교. compare_results 각 행:
-    {"구분표","계정과목","기간","별도","연결","차이"}."""
-    section_title(container, "연결-별도 비교 (Excel 정밀검증, 계정과목 단위)")
-    if not compare_results:
-        empty_note(container, "Excel 정밀검증 파일이 준비되지 않았습니다(사이드바 ⑧에서 PDF로 초안을 "
-                               "생성하거나 템플릿을 채운 뒤 파일을 지정하면 계정과목 단위로 별도/연결 금액과 "
-                               "차이를 비교합니다).")
-        return
-    n_diff = sum(1 for r in compare_results if (r.get("차이") or 0) != 0)
-    badge(container, f"비교 {len(compare_results)}건 · 차이 존재 {n_diff}건",
-          theme.ACCENT_PEACH if n_diff else theme.ACCENT_MINT).pack(anchor="w", padx=4, pady=(0, 6))
-    empty_note(container, "차이가 있다고 오류는 아닙니다(종속기업 실적 반영·내부거래 제거 등으로 정상적으로 "
-                           "차이가 남) - 연결조정 내역으로 설명되는지 확인할 검토포인트 후보 목록입니다.")
+def _fmt(v):
+    return "-" if v is None else f"{v:,.0f}"
 
+
+def _simple_table(container, headers, rows, highlight_col=None, right_cols=None, row_fills=None):
     table = ctk.CTkFrame(container, fg_color=theme.BG_CARD, corner_radius=10,
                           border_width=1, border_color=theme.BORDER_SOFT)
     table.pack(fill="x", pady=4, padx=4)
-    headers = ["구분표", "계정과목", "기간", "별도", "연결", "차이"]
     for c, h in enumerate(headers):
         ctk.CTkLabel(table, text=h, font=theme.FONT_SUBTITLE, text_color=theme.TEXT_MAIN,
                      anchor="w").grid(row=0, column=c, sticky="w", padx=8, pady=(8, 4))
-    for r, row in enumerate(compare_results[:100], start=1):
-        diff = row.get("차이")
-        bg = theme.ACCENT_PEACH if (diff not in (None, 0)) else theme.BG_MAIN
-        values = [row["구분표"], row["계정과목"], row["기간"],
-                  f"{row['별도']:,.0f}" if row.get("별도") is not None else "",
-                  f"{row['연결']:,.0f}" if row.get("연결") is not None else "",
-                  f"{diff:,.0f}" if diff is not None else ""]
-        for c, v in enumerate(values):
-            ctk.CTkLabel(table, text=v, font=theme.FONT_SMALL, text_color=theme.TEXT_MAIN,
-                         fg_color=bg, corner_radius=4, anchor="w" if c in (0, 1) else "e")\
-                .grid(row=r, column=c, sticky="ew", padx=2, pady=1, ipady=3, ipadx=4)
-    table.grid_columnconfigure(1, weight=3)
-    for c in (0, 2, 3, 4, 5):
+    for r, vals in enumerate(rows, start=1):
+        bg = theme.BG_MAIN
+        if highlight_col is not None:
+            v = str(vals[highlight_col])
+            bg = theme.ACCENT_MINT if v.startswith("일치") else (theme.ACCENT_CORAL if v == "불일치" else theme.ACCENT_PEACH)
+        if row_fills is not None and row_fills[r - 1]:
+            bg = row_fills[r - 1]
+        for c, v in enumerate(vals):
+            ctk.CTkLabel(table, text=str(v), font=theme.FONT_SMALL, text_color=theme.TEXT_MAIN, fg_color=bg,
+                         corner_radius=4,
+                         anchor=("e" if c in right_cols else "w") if right_cols is not None else
+                         ("e" if isinstance(v, (int, float)) or (isinstance(v, str) and v[:1].isdigit() and v.replace(',', '').replace('-', '').isdigit()) else "w"),
+                         wraplength=320).grid(row=r, column=c, sticky="ew", padx=2, pady=1, ipady=3, ipadx=4)
+    for c in range(len(headers)):
         table.grid_columnconfigure(c, weight=1)
-    if len(compare_results) > 100:
-        empty_note(container, f"외 {len(compare_results) - 100}건 더 있습니다 (자동 저장된 Excel에서 전체 확인 가능).")
+
+
+def render_footing(container, data):
+    """감사보고서 정밀 풋팅 결과 - 영역별 요약 + 예외 목록 (전체 내역은 Excel 시트)."""
+    summary = data.get("footing_summary")
+    rep = data.get("footing")
+    if not summary or rep is None:
+        empty_note(container, "정밀 풋팅 결과가 없습니다 (보고서종류 '감사'에서 수행).")
+        return
+    from .rules.audit_footing import exceptions
+    section_title(container, "정밀 풋팅 요약 (재무제표 본문 / 재무제표간 / 주석 표 / 재무제표↔주석 / 본문 서술금액 / 특수검증)")
+    tot = sum(a["total"] for a in summary)
+    bad = sum(a["mismatch"] for a in summary)
+    other = sum(a["rounding"] + a["other"] for a in summary)
+    row = ctk.CTkFrame(container, fg_color="transparent")
+    row.pack(fill="x", padx=4, pady=(0, 6))
+    badge(row, f"검증 {tot:,}건", theme.ACCENT_SKY).pack(side="left", padx=4)
+    badge(row, f"불일치 {bad}건", theme.ACCENT_CORAL if bad else theme.ACCENT_MINT).pack(side="left", padx=4)
+    badge(row, f"단수차이·확인필요 {other}건", theme.ACCENT_PEACH).pack(side="left", padx=4)
+    _simple_table(container, ["검증영역", "건수", "일치", "단수차이", "불일치", "기타"], right_cols=(1, 2, 3, 4, 5), rows=
+                  [[a["area"], a["total"], a["ok"], a["rounding"], a["mismatch"], a["other"]] for a in summary])
+    for e in data.get("footing_errors") or []:
+        empty_note(container, f"[엔진 오류] {e}")
+    ex = exceptions(rep)
+    section_title(container, f"예외 목록 {len(ex)}건 (불일치·단수차이·부호/표기 확인·미발견)")
+    if not ex:
+        empty_note(container, "예외 없음 - 모든 검증 항목이 일치합니다.")
+        return
+    _simple_table(container, ["결과", "영역", "주석/재무제표", "p.", "항목", "보고", "비교"], right_cols=(5, 6), rows=
+                  [[e[7], e[0], e[1] or "-", e[2], e[3], _fmt(e[5]) if isinstance(e[5], (int, float)) else "-",
+                    _fmt(e[6]) if isinstance(e[6], (int, float)) else "-"] for e in ex[:80]], highlight_col=0)
+    if len(ex) > 80:
+        empty_note(container, f"외 {len(ex) - 80}건 - 자동 저장 Excel의 '풋팅예외' 시트에서 전체 확인")
+
+
+def render_overview(container, label, data):
+    """감사보고서 개요 - 전기 대비 당기 (변동 항목 강조)."""
+    from .rules.audit_footing import NO_CHANGE_FLAG
+    section_title(container, f"[{label}] 감사보고서 개요 - 전기 대비 당기")
+    prior = (data.get("prior") or {}).get("overview")
+    pmap = {i["key"]: i["value"] for i in (prior or [])}
+    rows, flags = [], []
+    for it in data["overview"]:
+        pv = pmap.get(it["key"]) if prior else it.get("prior_in_report")
+        chg = ""
+        if pv is not None and it["key"] not in NO_CHANGE_FLAG:
+            chg = "변동" if str(pv).strip() != str(it["value"]).strip() else "동일"
+        rows.append([it["label"], pv if pv is not None else ("-" if prior else "전기 보고서 미제공"), it["value"], chg])
+    _simple_table(container, ["항목", "전기", "당기", "전기 대비"], rows, highlight_col=None, right_cols=(),
+                  row_fills=[theme.VARIANCE_AMOUNT_COLOR if r[3] == "변동" else None for r in rows])   # 변동 = 연한 노랑
+    n = sum(1 for r in rows if r[3] == "변동")
+    ps = (data.get("prior") or {}).get("summary")
+    if ps:
+        section_title(container, f"[{label}] 전기 감사보고서 대사 (당기 보고서의 전기 숫자 = 전기 보고서의 당기 숫자)")
+        row = ctk.CTkFrame(container, fg_color="transparent")
+        row.pack(fill="x", padx=4, pady=(0, 4))
+        badge(row, f"재무제표 {ps['fs_total']}건 중 불일치 {ps['fs_mismatch']}건",
+              theme.ACCENT_CORAL if ps['fs_mismatch'] else theme.ACCENT_MINT).pack(side="left", padx=4)
+        badge(row, f"주석 숫자 {ps['num_total']:,}건 대사 · 불일치 {ps['num_mismatch']} · 단수차이 {ps['num_round']}",
+              theme.ACCENT_CORAL if ps['num_mismatch'] else theme.ACCENT_MINT).pack(side="left", padx=4)
+        badge(row, f"짝 없음 {ps['num_unpaired']}칸(형식 변경 등)", theme.ACCENT_PEACH).pack(side="left", padx=4)
+        lst = [["당기 신설", x] for x in ps["notes_new"]] + [["당기 삭제", x] for x in ps["notes_removed"]] + \
+              [["제목 변경", x] for x in ps["notes_renamed"]]
+        if lst:
+            _simple_table(container, ["주석 변동", "주석"], lst, right_cols=(),
+                          row_fills=[theme.VARIANCE_AMOUNT_COLOR] * len(lst))
+        else:
+            empty_note(container, "주석 목록 변동 없음 (신설·삭제·제목변경 없음)")
+        bad = [r for r in (data.get("prior") or {}).get("note_compare", []) if r["result"].startswith("불일치")]
+        if bad:
+            _simple_table(container, ["주석", "표", "행", "열", "당기보고서 전기", "전기보고서 당기"],
+                          [[r["note"], r["table"][:40], r["row"], r["col"], _fmt(r["cur_prior"]), _fmt(r["prior_cur"])]
+                           for r in bad[:40]], right_cols=(4, 5))
+    if prior is None:
+        empty_note(container, "전기 감사보고서 PDF(선택)를 올리면 전기 대비 변동이 표시됩니다.")
+    elif n:
+        badge(container, f"전기 대비 변동 {n}건", theme.ACCENT_PEACH).pack(anchor="w", padx=4, pady=(2, 6))
