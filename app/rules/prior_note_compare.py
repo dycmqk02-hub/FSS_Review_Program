@@ -17,6 +17,8 @@ from .audit_footing import norm
 
 PERIOD_WORDS = re.compile(r'(당기말|전기말|당기초|전기초|당기|전기|기말|기초)')
 PERIOD_ROW = {'당기', '당기말', '전기', '전기말'}
+# 계정명 안의 '당기/전기'(당기손익-공정가치, 당기법인세 등) - 열 기간 판단에서 제외
+ACCT_PERIOD = re.compile(r'(당기|전기)(손익|순이익|순손실|순손익|법인세)')
 
 
 def _clean_title(t: str) -> str:
@@ -77,19 +79,27 @@ def _cells(rep, want: str) -> dict:
         colp, colk = [], []
         for nm in t['colnames']:
             n = (nm or '').replace(' ', '')
-            colp.append('전기' if '전기' in n else ('당기' if '당기' in n else None))
+            # '당기손익-공정가치', '당기법인세' 같은 계정명 속 '당기/전기'는 기간이 아님
+            np_ = ACCT_PERIOD.sub('', n)
+            colp.append('전기' if '전기' in np_ else ('당기' if '당기' in np_ else None))
             n2 = re.sub(r'^(구분|과목|항목|내역|계정)', '', PERIOD_WORDS.sub('', n))
             colk.append(n2 or '금액')
         row_period, section, seen = None, '', {}
+        prev = None
         for r in t['rows']:
             if not r['nums']:
                 lab = re.sub(r'[<>()\[\]]', '', r['n'])
                 if lab in PERIOD_ROW:
                     row_period = '전기' if '전기' in lab else '당기'
                     section, seen = '', {}
-                elif r['label'] and len(r['n']) <= 30 and not PERIOD_WORDS.search(r['n']):
-                    section = r['n']   # 기간어가 든 행(열 머리글)은 구분으로 보지 않음
+                elif r['label'] and len(r['n']) <= 30 and not PERIOD_WORDS.search(r['n']) and \
+                        not (prev is not None and prev['nums'] and not rep.is_total(prev['n'])):
+                    # 기간어가 든 행(열 머리글)은 구분으로 보지 않음.
+                    # 금액 행 바로 뒤의 빈 행(예: 금액 없이 이름만 있는 '단기금융상품')은 구분 머리글이 아니라 빈 항목
+                    section = r['n']
+                prev = r
                 continue
+            prev = r
             vec = rep._rowvec(t, r)
             for j, v in vec.items():
                 per = colp[j] if j < len(colp) and colp[j] else (row_period or ttag)
@@ -159,6 +169,57 @@ def compare_note_numbers(cur, prior, note_pairs: list) -> list:
     for lk, cks in cl.items():
         if len(cks) == 1 and len(pl.get(lk, [])) == 1:
             pairs[cks[0]] = pl[lk][0]
+    # 3차: 같은 표 안에서 구분(섹션) 문맥만 달라 못 찾은 칸 → (주석, 표, 행, 열, 순번)이 양쪽 모두 유일하면 연결
+    pk_used = set(pairs.values())
+    def nosec(k):
+        return k[:2] + k[3:]
+    cl, pl = {}, {}
+    for k in c_cells:
+        if k not in pairs:
+            cl.setdefault(nosec(k), []).append(k)
+    for k in p_cells:
+        if k not in pk_used:
+            pl.setdefault(nosec(k), []).append(k)
+    for lk, cks in cl.items():
+        if len(cks) == 1 and len(pl.get(lk, [])) == 1:
+            pairs[cks[0]] = pl[lk][0]
+    # 4차·5차: 같은 주석·같은 표 안에서 금액이 같은 칸 연결 (양쪽 모두 유일할 때만)
+    #   4차 = 행 이름(각주표시 (*1) 제거)이 같고 금액이 같음 → 열 머리글 문구·비율(%)만 다른 경우
+    #   5차 = 열 이름이 같고 금액이 같음(0 제외) → 계정명 변경(장단기→장기), 회사명이 행에 붙은 경우 등
+    foot = lambda s: re.sub(r'\(\*[^)]*\)|\*\d+', '', s)
+    colk_ = lambda s: re.sub(r'-?\d+(\.\d+)?%', '', s)
+    for keyf, nonzero in ((lambda k, v: (k[0], k[1], foot(k[3]), round(v)), False),
+                          (lambda k, v: (k[0], k[1], colk_(k[4]), round(v)), True)):
+        pk_used = set(pairs.values())
+        cl, pl = {}, {}
+        for k, (v, _) in c_cells.items():
+            if k not in pairs and not (nonzero and round(v) == 0):
+                cl.setdefault(keyf(k, v), []).append(k)
+        for k, (v, _) in p_cells.items():
+            if k not in pk_used and not (nonzero and round(v) == 0):
+                pl.setdefault(keyf(k, v), []).append(k)
+        for lk, cks in cl.items():
+            if len(cks) == 1 and len(pl.get(lk, [])) == 1:
+                pairs[cks[0]] = pl[lk][0]
+    # 6차: 행 이름이 바뀐 행 - 이미 짝지어진 칸으로 '당기 행 ↔ 전기 행' 대응을 알면, 같은 행의 나머지 칸(0 포함)을 열 기준으로 연결
+    alias, bad = {}, set()
+    for ck, pk in pairs.items():
+        a = (ck[0], ck[1], ck[3])
+        if a in alias and alias[a] != pk[3]:
+            bad.add(a)
+        alias.setdefault(a, pk[3])
+    pk_used = set(pairs.values())
+    cl, pl = {}, {}
+    for k in c_cells:
+        a = (k[0], k[1], k[3])
+        if k not in pairs and a in alias and a not in bad and alias[a] != k[3]:
+            cl.setdefault((k[0], k[1], alias[a], k[4], k[5]), []).append(k)
+    for k in p_cells:
+        if k not in pk_used:
+            pl.setdefault((k[0], k[1], k[3], k[4], k[5]), []).append(k)
+    for lk, cks in cl.items():
+        if len(cks) == 1 and len(pl.get(lk, [])) == 1:
+            pairs[cks[0]] = pl[lk][0]
     out, used = [], set()
     for k, (cv, ci) in c_cells.items():
         pk = pairs.get(k)
@@ -175,7 +236,8 @@ def compare_note_numbers(cur, prior, note_pairs: list) -> list:
                     'col': ci['col'], 'unit': ci['unit'], 'cur_prior': ci['raw'],
                     'prior_cur': pinfo.get('raw') if pv else None, 'cur_page': ci['page'],
                     'prior_page': pinfo.get('page') if pv else None,
-                    'prior_note': pinfo.get('note') if pv else None, 'result': res})
+                    'prior_note': pinfo.get('note') if pv else None, 'prior_row': pinfo.get('row') if pv else None,
+                    'result': res})
     for k, (pv, pi) in p_cells.items():
         if k not in used:
             out.append({'note': None, 'note_title': pi['note_title'], 'table': pi['table'], 'row': pi['row'], 'col': pi['col'],
@@ -246,18 +308,19 @@ def add_sheets(wb, prefix: str, note_list: list, note_nums: list) -> None:
 
     ws = wb.create_sheet(f'{prefix}주석전기대사'[:31])
     ws.append(['주석', '주석명', '표', '행', '열', '단위', '당기보고서 전기금액', '전기보고서 당기금액', '차이', '당기 p.',
-               '전기 p.', '결과'])
+               '전기 p.', '결과', '전기보고서 행(이름이 다를 때)'])
     for c in ws[1]:
         c.font = Font(name='Arial', bold=True, color='FFFFFF'); c.fill = HDR
     for i, r in enumerate(note_nums, start=2):
         ws.append([r['note'] if r['note'] is not None else f"(전기 {r['prior_note']})", r['note_title'], r['table'], r['row'],
                    r['col'], r['unit'], r['cur_prior'], r['prior_cur'], f'=IF(OR(G{i}="",H{i}=""),"",G{i}-H{i})',
-                   r['cur_page'], r['prior_page'], r['result']])
+                   r['cur_page'], r['prior_page'], r['result'],
+                   r.get('prior_row') if r.get('prior_row') and norm(r['prior_row']) != norm(r['row'] or '') else None])
         for j in (7, 8, 9):
             ws.cell(i, j).number_format = '#,##0;(#,##0);-'
         for c in ws[i]:
             c.font = Font(name='Arial', size=9)
-    for col, w in zip('ABCDEFGHIJKL', (8, 22, 36, 26, 18, 6, 18, 18, 12, 7, 7, 34)):
+    for col, w in zip('ABCDEFGHIJKLM', (8, 22, 36, 26, 18, 6, 18, 18, 12, 7, 7, 34, 30)):
         ws.column_dimensions[col].width = w
     ws.freeze_panes = 'A2'
     ws.auto_filter.ref = ws.dimensions

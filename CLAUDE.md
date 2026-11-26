@@ -23,7 +23,7 @@ python tests/regression.py            # 기준값(tests/expected.json)과 비교
 python tests/regression.py --update   # 의도한 개선으로 결과가 바뀐 경우에만 기준값 갱신
 ```
 샘플 PDF는 `tests/samples/`(git 제외)에 둔다 - 파일명은 tests/regression.py 상단 주석 참고.
-- 유니슨 제42기(2025.12.31) 연결/별도 + 원문XBRL ZIP
+- 유니슨 제42기(2025.12.31) 연결/별도 + 원문XBRL ZIP + 제41기(전기, 2025.03.20) 연결/별도(unison_pri_*.pdf)
 - 신한알파리츠 제16기(2025.10~2026.03, **6개월 결산**) 연결/별도 + 제15기(전기) 연결/별도
 서식이 다른 두 회사이므로, 한쪽만 맞추고 다른 쪽을 깨뜨리지 않도록 항상 둘 다 돌린다.
 
@@ -36,6 +36,8 @@ app/rules/audit_footing.py      ★ 정밀 풋팅 엔진 (pdfplumber 단어 좌�
 app/rules/audit_opinion.py      감사의견/KAM/계속기업/내부회계/개요(build_overview)
 app/rules/audit_checklist.py    감사기준서 700·701·570·706 필수 기재사항
 app/rules/prior_note_compare.py 전기 보고서 대비 주석 목록(신설/삭제/제목변경) + 주석 표 숫자 대사
+                                (짝짓기: 정확키 → 표제목 무시 → 구분 무시 → 행이름(각주 제거)+금액 → 열+금액(0 제외) → 행 별칭.
+                                 열 기간 판단 시 '당기손익-공정가치' 등 계정명 속 당기/전기 제외, 금액 행 사이 빈 행은 구분 머리글 아님)
 app/rules/xbrl_pdf_tieout.py    PDF 재무제표 ↔ XBRL 계정별 대사 (CF 지출요소 부호 관행 반영)
 app/variance_export.py          Excel 출력 (감사: 첫 시트 '개요', 풋팅 시트들, 전기대사 시트들)
 app/render_helpers.py           탭 렌더링 (render_footing, render_overview 등)

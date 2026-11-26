@@ -6,6 +6,7 @@
 
 샘플 파일은 tests/samples/ 에 아래 이름으로 넣는다 (git에는 올리지 않음, .gitignore 처리).
   unison_consol.pdf, unison_separate.pdf, unison_xbrl.zip           (유니슨 제42기, 2026.03.19)
+  unison_pri_consol.pdf, unison_pri_separate.pdf                    (유니슨 제41기, 2025.03.20)
   shinhan_cur_consol.pdf, shinhan_cur_separate.pdf                  (신한알파리츠 제16기, 2026.05.28)
   shinhan_pri_consol.pdf, shinhan_pri_separate.pdf                  (신한알파리츠 제15기, 2025.12.02)
 없는 파일이 있는 케이스는 건너뛴다.
@@ -24,8 +25,8 @@ from app.rules import xbrl_pdf_tieout as xt           # noqa: E402
 from app.rules import prior_note_compare as pnc       # noqa: E402
 
 CASES = {
-    'unison_consol': ('unison_consol.pdf', None, ('unison_xbrl.zip', 'consolidated')),
-    'unison_separate': ('unison_separate.pdf', None, ('unison_xbrl.zip', 'separate')),
+    'unison_consol': ('unison_consol.pdf', 'unison_pri_consol.pdf', ('unison_xbrl.zip', 'consolidated')),
+    'unison_separate': ('unison_separate.pdf', 'unison_pri_separate.pdf', ('unison_xbrl.zip', 'separate')),
     'shinhan_consol': ('shinhan_cur_consol.pdf', 'shinhan_pri_consol.pdf', None),
     'shinhan_separate': ('shinhan_cur_separate.pdf', 'shinhan_pri_separate.pdf', None),
 }
