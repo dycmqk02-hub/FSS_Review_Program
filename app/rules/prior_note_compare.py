@@ -233,9 +233,12 @@ def compare_note_numbers(cur, prior, note_pairs: list) -> list:
     for k, (cv, ci) in c_cells.items():
         pk = pairs.get(k)
         pv = p_cells.get(pk) if pk else None
+        # 당기보고서 기준: 당기보고서의 전기금액이 0('-')이고 전기보고서도 0이거나 짝이 없으면 검증 대상에서 제외
+        if abs(cv) < 0.5 and (pv is None or abs(pv[0]) < 0.5):
+            if pv is not None:
+                used.add(pk)
+            continue
         if pv is None:
-            if abs(cv) < 0.5:
-                continue   # 짝 없는 0원('-') 칸은 검증 대상에서 제외
             res, pval, pinfo = '전기보고서에 없음(신설·재분류·표 형식 변경 확인)', None, {}
         else:
             used.add(pk)
@@ -251,7 +254,7 @@ def compare_note_numbers(cur, prior, note_pairs: list) -> list:
                     'prior_note_title': pinfo.get('note_title') if pv else None,
                     'result': res})
     for k, (pv, pi) in p_cells.items():
-        if k not in used and abs(pv) >= 0.5:   # 짝 없는 0원('-') 칸은 검증 대상에서 제외
+        if k not in used:
             out.append({'note': None, 'note_title': pi['note_title'], 'table': pi['table'], 'row': pi['row'], 'col': pi['col'],
                         'unit': pi['unit'], 'cur_prior': None, 'prior_cur': pi['raw'], 'cur_page': None,
                         'prior_page': pi['page'], 'prior_note': pi['note'],

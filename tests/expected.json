@@ -80,10 +80,10 @@
     "현금및현금성자산 및 장단기금융상품 → 현금및현금성자산, 장단기금융상품",
     "매입채무 및 기타유동채무 → 매입채무 및 기타유동채무, 기타부채"
    ],
-   "num_total": 965,
-   "num_ok": 958,
+   "num_total": 724,
+   "num_ok": 717,
    "num_mismatch": 7,
-   "num_unpaired": 47
+   "num_unpaired": 86
   }
  },
  "unison_separate": {
@@ -169,10 +169,10 @@
    "notes_renamed": [
     "매입채무및기타유동채무 → 매입채무 및 기타유동채무, 기타부채"
    ],
-   "num_total": 884,
-   "num_ok": 879,
+   "num_total": 638,
+   "num_ok": 633,
    "num_mismatch": 5,
-   "num_unpaired": 42
+   "num_unpaired": 65
   }
  },
  "shinhan_consol": {

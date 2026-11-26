@@ -8,6 +8,8 @@
     숫자 스크리닝/증감분석 탭의 'PDF' 출처로 공급. 기존 휴리스틱 결과는 'legacy' 키에 보존.
   - 연결 vs 별도: 기존 키워드 비교 + 재무제표 본문 계정별 금액 비교
 """
+import re
+
 from . import pdf_utils
 from .rules.audit_checklist import evaluate_audit_checklist
 from .rules.audit_opinion import detect_audit_opinion, build_overview
@@ -35,6 +37,41 @@ def _footing(path: str, label: str):
         rep.sections, rep.special, rep.page_map = {}, [], {}
         rep.sce = {'cols': [], 'names': [], 'rows': []}
         return rep
+
+
+def report_period_key(path: str) -> tuple:
+    """보고서의 '나중 정도' 비교 키: (기수, 회계기간 종료일 yyyymmdd, 파일명 속 연도).
+    본문 앞쪽에서 '제 42 (당) 기 … 2025년 12월 31일까지' 를 찾고, 없으면 파일명의 연도(2026 / 26년)를 쓴다."""
+    import os
+    term, end, fyear = 0, 0, 0
+    try:
+        from pypdf import PdfReader
+        r = PdfReader(path)
+        text = '\n'.join((r.pages[i].extract_text() or '') for i in range(min(12, len(r.pages))))
+        m = re.search(r'제\s*(\d+)\s*\(?\s*당\s*\)?\s*기', text) or re.search(r'제\s*(\d+)\s*기', text)
+        if m:
+            term = int(m.group(1))
+        ends = [int(f'{y}{int(mo):02d}{int(d):02d}') for y, mo, d in
+                re.findall(r'(20\d{2})\s*년\s*(\d{1,2})\s*월\s*(\d{1,2})\s*일\s*(?:까지|현재)', text)]
+        end = max(ends) if ends else 0
+    except Exception:  # noqa: BLE001
+        pass
+    name = os.path.basename(path)
+    ys = [int(y) for y in re.findall(r'(?<!\d)(20\d{2})(?!\d)', name)]
+    ys += [2000 + int(y) for y in re.findall(r'(?<!\d)(\d{2})\s*년', name)]
+    fyear = max(ys) if ys else 0
+    return term, end, fyear
+
+
+def order_current_prior(cur: str | None, prior: str | None) -> tuple:
+    """당기·전기 파일이 바뀌어 들어와도 기수(→ 종료일 → 파일명 연도)가 큰 쪽을 당기로. (당기, 전기, 교체여부)"""
+    if not cur or not prior:
+        return cur, prior, False
+    kc, kp = report_period_key(cur), report_period_key(prior)
+    for a, b in zip(kc, kp):   # 둘 다 읽힌 첫 기준으로 비교
+        if a and b and a != b:
+            return (prior, cur, True) if b > a else (cur, prior, False)
+    return cur, prior, False
 
 
 def _prior_review(prior_path: str | None, rep, label: str) -> dict | None:
@@ -130,6 +167,16 @@ def run_review(fs_type: str, accounting_standard: str, files: dict, settings: di
         "sections": {},
     }
 
+    # 당기·전기 파일을 반대로 올려도 기수(17기>16기)·종료일·파일명 연도(2026>2025)가 큰 쪽을 당기로 처리
+    files = dict(files)
+    swapped = []
+    for ck, pk, lbl in (("consol", "prior_consol", "연결"), ("separate", "prior_separate", "별도"), ("main", "prior_main", fs_type)):
+        c, p, sw = order_current_prior(files.get(ck), files.get(pk))
+        if sw:
+            files[ck], files[pk] = c, p
+            swapped.append(lbl)
+    result["order_swapped"] = swapped
+
     if fs_type == "연결 vs 별도":
         report("연결 감사보고서 분석/풋팅 중...", 5)
         result["sections"]["consol"] = _single_doc_review(files["consol"], "연결", pm_consol, xbrl_source,
@@ -152,6 +199,11 @@ def run_review(fs_type: str, accounting_standard: str, files: dict, settings: di
                                                           se.FS_TYPE_TO_XBRL_KIND.get(fs_type),
                                                           prior_path=files.get("prior_main"))
         docs = [result["sections"]["single"]]
+    # 당기·전기를 바꿔 처리한 경우 개요 시트의 '전기:' 파일명 옆에 표시
+    for key, lbl in (("consol", "연결"), ("separate", "별도"), ("single", fs_type)):
+        pr = (result["sections"].get(key) or {}).get("prior")
+        if pr and lbl in swapped:
+            pr["file"] = f"{pr['file']} ※ 업로드 순서와 반대 → 기수·기간이 큰 파일을 당기로 처리"
 
     kw_set = {f["keyword"] for d in docs for f in d["accounting_changes"]}
     if kw_set and any(f for _l, f in ref_sources):
