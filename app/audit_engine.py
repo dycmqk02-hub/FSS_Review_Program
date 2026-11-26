@@ -39,32 +39,36 @@ def _footing(path: str, label: str):
         return rep
 
 
+_COVER_RX = re.compile(r'제\s*(\d+)\s*(?:\(\s*[당전]\s*\))?\s*기\s*(20\d{2})\s*년\s*(\d{1,2})\s*월\s*(\d{1,2})\s*일\s*부\s*터'
+                       r'\s*(20\d{2})\s*년\s*(\d{1,2})\s*월\s*(\d{1,2})\s*일\s*까\s*지')
+
+
 def report_period_key(path: str) -> tuple:
-    """보고서의 '나중 정도' 비교 키: (기수, 회계기간 종료일 yyyymmdd, 파일명 속 연도).
-    본문 앞쪽에서 '제 42 (당) 기 … 2025년 12월 31일까지' 를 찾고, 없으면 파일명의 연도(2026 / 26년)를 쓴다."""
-    import os
-    term, end, fyear = 0, 0, 0
+    """보고서의 당기 (기수, 회계기간 종료일 yyyymmdd).
+    재무제표 표지('(첨부)연결재무제표' 페이지)의 '제 42 기 2025년 01월 01일 부터 2025년 12월 31일 까지 /
+    제 41 기 …' 중 기수가 큰 쪽이 그 보고서의 당기. 표지를 못 찾으면 감사보고서 본문의 '제 n (당) 기'."""
+    term, end = 0, 0
     try:
         from pypdf import PdfReader
         r = PdfReader(path)
-        text = '\n'.join((r.pages[i].extract_text() or '') for i in range(min(12, len(r.pages))))
-        m = re.search(r'제\s*(\d+)\s*\(?\s*당\s*\)?\s*기', text) or re.search(r'제\s*(\d+)\s*기', text)
-        if m:
-            term = int(m.group(1))
-        ends = [int(f'{y}{int(mo):02d}{int(d):02d}') for y, mo, d in
-                re.findall(r'(20\d{2})\s*년\s*(\d{1,2})\s*월\s*(\d{1,2})\s*일\s*(?:까지|현재)', text)]
-        end = max(ends) if ends else 0
+        texts = [(r.pages[i].extract_text() or '') for i in range(min(15, len(r.pages)))]
+        cover = next((t for t in texts if '첨부' in t and _COVER_RX.search(t)), None) or \
+            next((t for t in texts if len(_COVER_RX.findall(t)) >= 2), None)
+        if cover:
+            periods = [(int(m.group(1)), int(f'{m.group(5)}{int(m.group(6)):02d}{int(m.group(7)):02d}'))
+                       for m in _COVER_RX.finditer(cover)]
+            term, end = max(periods)
+        else:
+            m = re.search(r'제\s*(\d+)\s*\(\s*당\s*\)\s*기', '\n'.join(texts))
+            if m:
+                term = int(m.group(1))
     except Exception:  # noqa: BLE001
         pass
-    name = os.path.basename(path)
-    ys = [int(y) for y in re.findall(r'(?<!\d)(20\d{2})(?!\d)', name)]
-    ys += [2000 + int(y) for y in re.findall(r'(?<!\d)(\d{2})\s*년', name)]
-    fyear = max(ys) if ys else 0
-    return term, end, fyear
+    return term, end
 
 
 def order_current_prior(cur: str | None, prior: str | None) -> tuple:
-    """당기·전기 파일이 바뀌어 들어와도 기수(→ 종료일 → 파일명 연도)가 큰 쪽을 당기로. (당기, 전기, 교체여부)"""
+    """당기·전기 파일이 바뀌어 들어와도 재무제표 표지의 기수(→ 종료일)가 큰 쪽을 당기로. (당기, 전기, 교체여부)"""
     if not cur or not prior:
         return cur, prior, False
     kc, kp = report_period_key(cur), report_period_key(prior)
@@ -167,7 +171,7 @@ def run_review(fs_type: str, accounting_standard: str, files: dict, settings: di
         "sections": {},
     }
 
-    # 당기·전기 파일을 반대로 올려도 기수(17기>16기)·종료일·파일명 연도(2026>2025)가 큰 쪽을 당기로 처리
+    # 당기·전기 파일을 반대로 올려도 재무제표 표지의 기수(17기>16기)·종료일이 큰 쪽을 당기로 처리
     files = dict(files)
     swapped = []
     for ck, pk, lbl in (("consol", "prior_consol", "연결"), ("separate", "prior_separate", "별도"), ("main", "prior_main", fs_type)):

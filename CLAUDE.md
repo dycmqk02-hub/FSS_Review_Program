@@ -32,7 +32,8 @@ python tests/regression.py --update   # 의도한 개선으로 결과가 바뀐 
 main.py → app/ui.py (customtkinter)  ── 보고서종류 ① 분반기 / 감사
 app/review_engine.py   보고서종류별 분기
 app/audit_engine.py    감사보고서 파이프라인 (결과 포맷은 semiannual_engine 과 동일 → 기존 탭 재사용)
-                       `order_current_prior`: 당기·전기 파일이 바뀌어 와도 기수 → 종료일 → 파일명 연도가 큰 쪽을 당기로 (개요 시트에 표시)
+                       `order_current_prior`: 당기·전기 파일이 바뀌어 와도 재무제표 표지('제 42 기 … 부터 … 까지 / 제 41 기 …')의
+                       기수 → 종료일이 큰 쪽을 당기로 (파일명은 쓰지 않음, 바꿔 처리하면 개요 시트에 표시)
 app/rules/audit_footing.py      ★ 정밀 풋팅 엔진 (pdfplumber 단어 좌표로 행/열 복원)
 app/rules/audit_opinion.py      감사의견/KAM/계속기업/내부회계/개요(build_overview)
 app/rules/audit_checklist.py    감사기준서 700·701·570·706 필수 기재사항
