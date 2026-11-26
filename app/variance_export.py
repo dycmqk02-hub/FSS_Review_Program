@@ -2,7 +2,7 @@
 
 STATEMENT_ORDER = ["재무상태표", "손익계산서", "자본변동표", "현금흐름표"]
 # 사용자 요청으로 Excel에서 만들지 않는 증감분석 시트 (화면 '증감분석' 탭에는 계속 표시)
-EXCLUDED_VARIANCE_SHEETS = {"연결_자본변동표", "연결_현금흐름표"}
+EXCLUDED_VARIANCE_SHEETS = {"연결_자본변동표", "연결_현금흐름표", "별도_자본변동표", "별도_현금흐름표"}
 
 
 def _write_sheet(wb, sheet_name: str, doc_label: str, stmt: str, data: dict, unit: str | None,
