@@ -762,6 +762,16 @@ class Report:
             tk = toks[i]
             if tk['t'] in ('합', '총', '소') and i + 1 < len(toks) and toks[i + 1]['t'] == '계':
                 out.append({'t': tk['t'] + '계', 'x0': tk['x0'], 'x1': toks[i + 1]['x1']}); i += 2; continue
+            # 자간을 띄운 한 글자 단어(예: '채 권', '채 무', '구 분'): 바로 붙은 한 글자들을 한 단어로 합침.
+            # 안 합치면 묶음 머리글 '채무'의 '채'가 왼쪽 열(미수수익)에 붙는 오류가 생김
+            if len(tk['t']) == 1 and re.match(r'[가-힣]', tk['t']):
+                j = i
+                while j + 1 < len(toks) and len(toks[j + 1]['t']) == 1 and re.match(r'[가-힣]', toks[j + 1]['t']) \
+                        and 0 <= toks[j + 1]['x0'] - toks[j]['x1'] <= 8:
+                    j += 1
+                if j > i:
+                    out.append({'t': ''.join(x['t'] for x in toks[i:j + 1]), 'x0': tk['x0'], 'x1': toks[j]['x1']})
+                    i = j + 1; continue
             out.append(tk); i += 1
         return out
 
