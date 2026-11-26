@@ -58,7 +58,7 @@
   ],
   "prior": {
    "fs_total": 99,
-   "fs_mismatch": 6,
+   "fs_mismatch": 3,
    "notes_new": [
     "7. 사용제한 금융상품",
     "11. 금융자산",
@@ -80,10 +80,10 @@
     "현금및현금성자산 및 장단기금융상품 → 현금및현금성자산, 장단기금융상품",
     "매입채무 및 기타유동채무 → 매입채무 및 기타유동채무, 기타부채"
    ],
-   "num_total": 851,
-   "num_ok": 844,
+   "num_total": 965,
+   "num_ok": 958,
    "num_mismatch": 7,
-   "num_unpaired": 234
+   "num_unpaired": 118
   }
  },
  "unison_separate": {
@@ -146,7 +146,7 @@
   ],
   "prior": {
    "fs_total": 93,
-   "fs_mismatch": 3,
+   "fs_mismatch": 0,
    "notes_new": [
     "6. 현금및현금성자산, 장단기금융상품",
     "7. 사용제한 금융상품",
@@ -169,10 +169,10 @@
    "notes_renamed": [
     "매입채무및기타유동채무 → 매입채무 및 기타유동채무, 기타부채"
    ],
-   "num_total": 763,
-   "num_ok": 758,
+   "num_total": 884,
+   "num_ok": 879,
    "num_mismatch": 5,
-   "num_unpaired": 224
+   "num_unpaired": 100
   }
  },
  "shinhan_consol": {

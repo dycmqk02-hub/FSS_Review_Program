@@ -1871,6 +1871,7 @@ def compare_prior_fs(cur: Report, prior: Report) -> list:
             if pi not in used:
                 res = '참고(0원 항목 표시 생략)' if p['cy'] == 0 else '당기보고서에 없음(계정 통합·명칭변경 확인)'
                 out.append({'stmt': stmt, 'label': p['label'], 'cur_prior_col': None, 'prior_report_cy': p['cy'], 'result': res})
+        _detect_reclass([o for o in out if o['stmt'] == stmt])
     ce = [r for r in cur.sce['rows'] if '말)' in r['label']]
     pe = [r for r in prior.sce['rows'] if '말)' in r['label']]
     if ce and pe:
@@ -1881,6 +1882,38 @@ def compare_prior_fs(cur: Report, prior: Report) -> list:
             out.append({'stmt': '자본변동표', 'label': f'전기말 {nm}', 'cur_prior_col': cv, 'prior_report_cy': pv,
                         'result': '일치' if pv is not None and pv == cv else ('전기보고서에 없음' if pv is None else '불일치(재작성 확인)')})
     return out
+
+
+def _detect_reclass(rows: list) -> None:
+    """전기 재무제표 대사에서 '불일치' 차이가 한쪽에만 있는 계정(1~3개) 금액과 원 단위까지 같으면 재분류로 판정.
+    - 전기보고서에만 있는 계정(예: 선급금)이 당기보고서 계정(기타유동자산)에 통합: 당기 = 전기 + 통합계정
+    - 당기보고서에 새로 분리된 계정(예: 기타유동부채): 당기 = 전기 - 분리계정"""
+    from itertools import combinations
+    pool = [(o, 1, o['prior_report_cy']) for o in rows if o['result'].startswith('당기보고서에 없음') and o['prior_report_cy']]
+    pool += [(o, -1, o['cur_prior_col']) for o in rows if o['result'].startswith('전기보고서에 없음') and o['cur_prior_col']]
+    taken = set()
+    for m in rows:
+        if not m['result'].startswith('불일치') or m['cur_prior_col'] is None or m['prior_report_cy'] is None:
+            continue
+        d = m['cur_prior_col'] - m['prior_report_cy']
+        free = [x for x in pool if id(x[0]) not in taken]
+        hit = None
+        for n in (1, 2, 3):
+            hit = next((c for c in combinations(free, n) if abs(sum(s * v for _, s, v in c) - d) < 0.5), None)
+            if hit:
+                break
+        if not hit:
+            continue
+        desc = []
+        for o, s, v in hit:
+            taken.add(id(o))
+            if s > 0:
+                desc.append(f"전기 '{o['label']}' {v:,.0f} 통합")
+                o['result'] = f"재분류(당기보고서 '{m['label']}'에 통합)"
+            else:
+                desc.append(f"'{o['label']}' {v:,.0f} 분리")
+                o['result'] = f"재분류(전기보고서 '{m['label']}'에서 분리)"
+        m['result'] = '재분류(' + ', '.join(desc) + ' 시 일치 - 재분류 공시 확인)'
 
 
 def add_prior_sheet(wb, name: str, rows: list) -> None:

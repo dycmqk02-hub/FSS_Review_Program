@@ -81,7 +81,11 @@ def _cells(rep, want: str) -> dict:
             n = (nm or '').replace(' ', '')
             # '당기손익-공정가치', '당기법인세' 같은 계정명 속 '당기/전기'는 기간이 아님
             np_ = ACCT_PERIOD.sub('', n)
-            colp.append('전기' if '전기' in np_ else ('당기' if '당기' in np_ else None))
+            p_ = '전기' if '전기' in np_ else ('당기' if '당기' in np_ else None)
+            # 2단 머리글(당기말 → 유동|비유동): 앞 열이 '기간+하위항목'이면 기간어 없는 다음 열도 같은 기간
+            if p_ is None and colp and colp[-1] and colk and colk[-1] != '금액':
+                p_ = colp[-1]
+            colp.append(p_)
             n2 = re.sub(r'^(구분|과목|항목|내역|계정)', '', PERIOD_WORDS.sub('', n))
             colk.append(n2 or '금액')
         row_period, section, seen = None, '', {}
@@ -188,8 +192,13 @@ def compare_note_numbers(cur, prior, note_pairs: list) -> list:
     #   5차 = 열 이름이 같고 금액이 같음(0 제외) → 계정명 변경(장단기→장기), 회사명이 행에 붙은 경우 등
     foot = lambda s: re.sub(r'\(\*[^)]*\)|\*\d+', '', s)
     colk_ = lambda s: re.sub(r'-?\d+(\.\d+)?%', '', s)
+    paren = lambda s: re.sub(r'\(.*?\)|\*\d+', '', s)   # 괄호 안 문구 전체 제거: '대손설정(환입)' = '대손설정'
     for keyf, nonzero in ((lambda k, v: (k[0], k[1], foot(k[3]), round(v)), False),
-                          (lambda k, v: (k[0], k[1], colk_(k[4]), round(v)), True)):
+                          (lambda k, v: (k[0], k[1], colk_(k[4]), round(v)), True),
+                          # 표 제목이 해마다 달라 표 키가 안 맞는 경우: 같은 주석 안 행 이름+금액
+                          (lambda k, v: (k[0], paren(k[3]), round(v)), True),
+                          # 주석 통합·분리(예: 전기 '8.선급금' → 당기 '9.기타자산'): 주석과 무관하게 행 이름+금액
+                          (lambda k, v: (paren(k[3]), round(v)), True)):
         pk_used = set(pairs.values())
         cl, pl = {}, {}
         for k, (v, _) in c_cells.items():
@@ -237,6 +246,7 @@ def compare_note_numbers(cur, prior, note_pairs: list) -> list:
                     'prior_cur': pinfo.get('raw') if pv else None, 'cur_page': ci['page'],
                     'prior_page': pinfo.get('page') if pv else None,
                     'prior_note': pinfo.get('note') if pv else None, 'prior_row': pinfo.get('row') if pv else None,
+                    'prior_note_title': pinfo.get('note_title') if pv else None,
                     'result': res})
     for k, (pv, pi) in p_cells.items():
         if k not in used:
@@ -286,6 +296,20 @@ def summary(note_list: list, note_nums: list, fs_rows: list) -> dict:
     }
 
 
+def _prior_row_note(r) -> str | None:
+    """주석전기대사 시트 M열: 전기보고서의 짝 행 이름이 다르거나, 다른 제목의 주석(통합·분리)에서 짝을 찾았을 때만 표시."""
+    if r.get('note') is None or not r.get('prior_row'):
+        return None
+    parts = []
+    if r.get('prior_note_title') and _clean_title(r['prior_note_title']) != _clean_title(r.get('note_title') or ''):
+        parts.append(f"전기 주석{r['prior_note']}")
+    if norm(r['prior_row']) != norm(r['row'] or ''):
+        parts.append(r['prior_row'])
+    elif parts:
+        parts.append(r['prior_row'])
+    return ' '.join(parts) or None
+
+
 def add_sheets(wb, prefix: str, note_list: list, note_nums: list) -> None:
     from openpyxl.styles import Font, PatternFill
     from openpyxl.formatting.rule import CellIsRule, FormulaRule
@@ -315,7 +339,7 @@ def add_sheets(wb, prefix: str, note_list: list, note_nums: list) -> None:
         ws.append([r['note'] if r['note'] is not None else f"(전기 {r['prior_note']})", r['note_title'], r['table'], r['row'],
                    r['col'], r['unit'], r['cur_prior'], r['prior_cur'], f'=IF(OR(G{i}="",H{i}=""),"",G{i}-H{i})',
                    r['cur_page'], r['prior_page'], r['result'],
-                   r.get('prior_row') if r.get('prior_row') and norm(r['prior_row']) != norm(r['row'] or '') else None])
+                   _prior_row_note(r)])
         for j in (7, 8, 9):
             ws.cell(i, j).number_format = '#,##0;(#,##0);-'
         for c in ws[i]:
