@@ -773,6 +773,63 @@ class Report:
                                    f"당기표 기초 = 전기표 기말 (p.{self.pg(pri['page'])})")
 
     # ---------------------------------------------------- 산식표 (곱셈/나눗셈)
+    _DATE_RX = re.compile(r'(\d{4})\s*(?:[-./]|년)\s*(\d{1,2})\s*(?:[-./]|월)\s*(\d{1,2})\s*일?')
+
+    def _weighted_shares_by_dates(self, t) -> bool:
+        """가중평균주식수 산정표 중 '기간' 열에 시작일~종료일이 적힌 표를 날짜 기준으로 검증.
+        - 일수 = 종료일 - 시작일 + 1 (보고 일수와 대사)
+        - 적수 = 유통주식수 × 재계산 일수
+        - 가중평균 = Σ적수 ÷ 대상기간 일수(표의 가장 이른 시작일 ~ 가장 늦은 종료일)
+        날짜 범위가 있는 행이 하나도 없으면 False (기존 방식으로 처리)."""
+        from datetime import date
+        drows, wavg = [], None
+        for r in t['rows']:
+            text = ' '.join(tk['t'] for tk in r['toks'])
+            ds = []
+            for m in self._DATE_RX.finditer(text):
+                try:
+                    ds.append(date(int(m.group(1)), int(m.group(2)), int(m.group(3))))
+                except ValueError:
+                    pass
+            v = [x for x, _, _ in r['nums']]
+            if len(ds) >= 2 and ds[1] >= ds[0] and len(v) >= 3:
+                drows.append((r, ds[0], ds[1], v[-3:]))
+            elif '가중평균' in r['n'] and v:
+                wavg = (r, v[-1])
+        if not drows:
+            return False
+        tot_prod = 0
+        for r, d0, d1, v in drows:
+            days_calc = (d1 - d0).days + 1
+            # 마지막 세 숫자 중 적수 = 절댓값 최대, 일수 = 1~366 정수, 나머지 = 주식수 (열 순서가 달라도 대응)
+            prod = max(v, key=abs)
+            rest = list(v); rest.remove(prod)
+            day_rep = next((x for x in rest if 0 < x <= 366 and x == int(x)), None)
+            if day_rep is None:
+                continue
+            rest.remove(day_rep)
+            shares = rest[0]
+            lbl = r['label'] or '(행)'
+            period = f'{d0:%Y-%m-%d}~{d1:%Y-%m-%d}'
+            self._add_note(t, '산식(일수)', lbl, '일수', day_rep, days_calc, 1,
+                           f'일수 = {period} ({days_calc:,}일, 시작일·종료일 포함)',
+                           override='일치' if day_rep == days_calc else '불일치')
+            calc = shares * days_calc
+            self._add_note(t, '산식(곱셈)', lbl, '적수', prod, calc, 1,
+                           f'적수 = 주식수 {shares:,.0f} × 일수 {days_calc:,}일({period})',
+                           override='일치' if abs(prod - calc) < 1 else '불일치')
+            tot_prod += prod
+        if wavg:
+            start = min(d0 for _, d0, _, _ in drows)
+            end = max(d1 for _, _, d1, _ in drows)
+            tot_days = (end - start).days + 1
+            r, wv = wavg
+            calc = tot_prod / tot_days
+            self._add_note(t, '산식(나눗셈)', r['label'], '가중평균주식수', wv, round(calc), 1,
+                           f'가중평균 = Σ적수 {tot_prod:,.0f} ÷ 대상기간 {start:%Y-%m-%d}~{end:%Y-%m-%d} {tot_days:,}일',
+                           override='일치' if abs(wv - calc) < 1 else '불일치')
+        return True
+
     def _formula_table(self, t):
         hdr = ' '.join(tk['t'] for hl in t['header'] for tk in hl)
         names = [n.replace(' ', '') for n in t['colnames']]
@@ -806,7 +863,9 @@ class Report:
                         self._add_note(t, '세로합계', tot['label'], t['colnames'][j] or f'열{j + 1}', tv[j], calc, len(body),
                                        f'합계 = Σ회사별({len(body)}행)')
         # (1-2) 가중평균주식수 산정표: 적수 = 주식수 × 일수, 가중평균 = Σ적수 ÷ 기간일수
-        if '적수' in hdr.replace(' ', '') and '일수' in hdr.replace(' ', ''):
+        if '적수' in hdr.replace(' ', '') and '일수' in hdr.replace(' ', '') and self._weighted_shares_by_dates(t):
+            pass  # 기간 열(시작일~종료일)이 있는 표는 날짜로 일수를 재계산해 검증 완료
+        elif '적수' in hdr.replace(' ', '') and '일수' in hdr.replace(' ', ''):
             days, tot_prod, wavg = [], 0, None
             for r in t['rows']:
                 v = [x for x, _, _ in r['nums']]
