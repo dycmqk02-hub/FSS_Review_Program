@@ -1,6 +1,8 @@
 """리뷰 결과 전체 및 증감분석표(재무상태표/손익계산서/자본변동표/현금흐름표) Excel 내보내기."""
 
 STATEMENT_ORDER = ["재무상태표", "손익계산서", "자본변동표", "현금흐름표"]
+# 사용자 요청으로 Excel에서 만들지 않는 증감분석 시트 (화면 '증감분석' 탭에는 계속 표시)
+EXCLUDED_VARIANCE_SHEETS = {"연결_자본변동표", "연결_현금흐름표"}
 
 
 def _write_sheet(wb, sheet_name: str, doc_label: str, stmt: str, data: dict, unit: str | None,
@@ -69,6 +71,8 @@ def _add_variance_sheets(wb, result: dict) -> None:
         for stmt in STATEMENT_ORDER:
             stmt_data = variance_tables.get(stmt, {"rows": [], "note": "데이터 없음"})
             sheet_name = f"{doc_label}_{stmt}" if len(docs) > 1 else stmt
+            if sheet_name in EXCLUDED_VARIANCE_SHEETS:
+                continue
             _write_sheet(wb, sheet_name, doc_label, stmt, stmt_data, unit, pm)
 
 
@@ -82,9 +86,7 @@ def _add_footing_sheets(wb, result: dict) -> None:
     for key, lbl in docs:
         prefix = f"{lbl}_" if len(docs) > 1 else ""
         af.add_excel_sheets(wb, lbl, sections[key]["footing"], prefix=prefix)
-    amt = (sections.get("consol_vs_sep") or {}).get("amount_comparison")
-    if amt:
-        af.add_consol_sep_sheet(wb, amt)
+    # '연결vs별도_금액비교' 시트는 사용자 요청으로 Excel에서 제외 (화면 '연결 vs 별도' 탭에는 계속 표시)
 
 
 def export_full_excel(result: dict, path: str) -> None:
