@@ -83,7 +83,7 @@
    "num_total": 965,
    "num_ok": 958,
    "num_mismatch": 7,
-   "num_unpaired": 118
+   "num_unpaired": 47
   }
  },
  "unison_separate": {
@@ -172,7 +172,7 @@
    "num_total": 884,
    "num_ok": 879,
    "num_mismatch": 5,
-   "num_unpaired": 100
+   "num_unpaired": 42
   }
  },
  "shinhan_consol": {
