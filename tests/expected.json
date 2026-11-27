@@ -230,10 +230,10 @@
    ],
    "notes_removed": [],
    "notes_renamed": [],
-   "num_total": 303,
-   "num_ok": 302,
+   "num_total": 323,
+   "num_ok": 322,
    "num_mismatch": 1,
-   "num_unpaired": 134
+   "num_unpaired": 29
   }
  },
  "shinhan_separate": {
@@ -291,10 +291,10 @@
    ],
    "notes_removed": [],
    "notes_renamed": [],
-   "num_total": 247,
-   "num_ok": 247,
+   "num_total": 251,
+   "num_ok": 251,
    "num_mismatch": 0,
-   "num_unpaired": 107
+   "num_unpaired": 33
   }
  }
 }

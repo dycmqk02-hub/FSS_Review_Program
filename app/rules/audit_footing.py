@@ -257,7 +257,7 @@ class Report:
                     calc = sum(d[per] for d in det)
                     self._add_fs(stmt, hdr['label'], f"{hdr['n']} = Σ하위 {len(det)}개 항목", per, hdr[per], calc, hdr['page'])
             # section total
-            tot_key = [k for k in totals if k.startswith(sec) and k.endswith('총계') and not re.search(r'과|와|및', k)]
+            tot_key = [k for k in totals if sec and k.startswith(sec) and k.endswith('총계') and not re.search(r'과|와|및', k)]
             if tot_key:
                 tr = totals[tot_key[0]]
                 sec_tot[sec] = tr
@@ -1421,8 +1421,9 @@ class Report:
                     if r.get(per):
                         cands.append((f"{st}:{r['label']}({'당기' if per == 'cy' else '전기'})", abs(r[per])))
         bs = self.fs_rows['BS']
-        ca = next((r for r in bs if '유동자산' in r['n'] and '비' not in r['n']), None)
-        cl = next((r for r in bs if '유동부채' in r['n'] and '비' not in r['n']), None)
+        # 금액이 있는 행만 (금액 없는 '유동자산' 제목 행 제외)
+        ca = next((r for r in bs if '유동자산' in r['n'] and '비' not in r['n'] and r['cy'] is not None), None)
+        cl = next((r for r in bs if '유동부채' in r['n'] and '비' not in r['n'] and r['cy'] is not None), None)
         if ca and cl:
             cands.append(('파생: 유동부채-유동자산(당기)', cl['cy'] - ca['cy']))
         rng = list(range(2, s['fs_start'])) + list(range(s['notes_start'], s['notes_start'] + 3))
